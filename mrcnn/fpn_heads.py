@@ -1,5 +1,7 @@
 from keras import layers as KL, backend as K
 
+import tensorflow as tf
+
 from mrcnn.batch_norm import BatchNorm
 from mrcnn.roi_align_layer import PyramidROIAlign
 
@@ -116,8 +118,7 @@ def build_fpn_mask_graph(rois, feature_maps, image_meta,
     return x
 
 
-def build_fpn_keypoint_graph(rois, feature_maps,
-                             image_shape, pool_size, num_keypoints):
+def build_fpn_keypoint_graph(rois, feature_maps, pool_size, num_keypoints):
     """Builds the computation graph of the keypoint head of Feature Pyramid Network.
 
     rois: [batch, num_rois, (y1, x1, y2, x2)] Proposal boxes in normalized
@@ -134,8 +135,7 @@ def build_fpn_keypoint_graph(rois, feature_maps,
 
     # ROI Pooling
     # Shape: [batch, num_rois, pool_height, pool_width, channels]
-    x = PyramidROIAlign([pool_size, pool_size], image_shape,
-                        name="roi_align_keypoint_mask")([rois] + feature_maps)
+    x = PyramidROIAlign([pool_size, pool_size], name="roi_align_keypoint_mask")([rois] + feature_maps)
     for i in range(8):
         x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                                name="mrcnn_keypoint_mask_conv{}".format(i + 1))(x)

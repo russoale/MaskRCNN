@@ -238,7 +238,6 @@ class MaskRCNN():
                                               train_bn=config.TRAIN_BN)
 
             keypoint_mrcnn_mask = build_fpn_keypoint_graph(rois, mrcnn_feature_maps,
-                                                           config.IMAGE_SHAPE,
                                                            config.KEYPOINT_MASK_POOL_SIZE,
                                                            config.NUM_KEYPOINTS)
 
@@ -294,7 +293,6 @@ class MaskRCNN():
                                               config.NUM_CLASSES,
                                               train_bn=config.TRAIN_BN)
             keypoint_mrcnn = build_fpn_keypoint_graph(detection_boxes, mrcnn_feature_maps,
-                                                      config.IMAGE_SHAPE,
                                                       config.KEYPOINT_MASK_POOL_SIZE,
                                                       config.NUM_KEYPOINTS)
 

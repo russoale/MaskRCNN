@@ -1,5 +1,6 @@
 import tensorflow as tf
 from keras import backend as K
+import keras.layers as KL
 
 from mrcnn.misc_functions import batch_pack_graph
 
