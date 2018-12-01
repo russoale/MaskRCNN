@@ -483,17 +483,18 @@ def load_image_gt_keypoints(dataset, config, image_id, augment=True,
     """
     # Load image and mask
     image = dataset.load_image(image_id)
-    # mask, class_ids = dataset.load_mask(image_id)
-    shape = image.shape
     keypoints, mask, class_ids = dataset.load_keypoints(image_id)
+    original_shape = image.shape
     assert (config.NUM_KEYPOINTS == keypoints.shape[1])
 
-    image, window, scale, padding = utils.resize_image(
+    image, window, scale, padding, crop = utils.resize_image(
         image,
         min_dim=config.IMAGE_MIN_DIM,
+        min_scale=config.IMAGE_MIN_SCALE,
         max_dim=config.IMAGE_MAX_DIM,
-        padding=config.IMAGE_PADDING)
-    mask = utils.resize_mask(mask, scale, padding)
+        mode=config.IMAGE_RESIZE_MODE)
+
+    mask = utils.resize_mask(mask, scale, padding, crop)
     keypoints = utils.resize_keypoints(keypoints, image.shape[:2], scale, padding)
 
     # Random horizontal flips.
@@ -527,7 +528,8 @@ def load_image_gt_keypoints(dataset, config, image_id, augment=True,
 
     # Image meta data
     # image_meta:image_id,image_shape,windows.active_class_ids
-    image_meta = compose_image_meta(image_id, shape, window, active_class_ids)
+    image_meta = compose_image_meta(image_id, original_shape, image.shape,
+                                    window, scale, active_class_ids)
 
     return image, image_meta, class_ids, bbox, mask, keypoints
 
