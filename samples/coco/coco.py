@@ -61,7 +61,7 @@ COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 # Directory to save logs and model checkpoints, if not provided
 # through the command line argument --logs
 DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
-DEFAULT_DATASET_YEAR = "2014"
+DEFAULT_DATASET_YEAR = "2017"
 
 
 ############################################################
@@ -82,29 +82,43 @@ class CocoConfig(Config):
     IMAGES_PER_GPU = 2
 
     # Uncomment to train on 8 GPUs (default is 1)
-    # GPU_COUNT = 8
+    GPU_COUNT = 2
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 1  # Person and background
 
+    BACKBONE = "resnet50"
+
     NUM_KEYPOINTS = 17
+
     MASK_SHAPE = [28, 28]
+
     KEYPOINT_MASK_SHAPE = [56, 56]
-    # DETECTION_MAX_INSTANCES = 50
+
     TRAIN_ROIS_PER_IMAGE = 100
+
     MAX_GT_INSTANCES = 128
+
     RPN_TRAIN_ANCHORS_PER_IMAGE = 150
+
     USE_MINI_MASK = True
+
     MASK_POOL_SIZE = 14
+
     KEYPOINT_MASK_POOL_SIZE = 7
+
     LEARNING_RATE = 0.002
+
     STEPS_PER_EPOCH = 1000
+
     WEIGHT_LOSS = True
+
     KEYPOINT_THRESHOLD = 0.005
 
     PART_STR = ["nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder",
                 "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist",
                 "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"]
+
     LIMBS = [0, -1, -1, 5, -1, 6, 5, 7, 6, 8, 7, 9, 8, 10, 11, 13, 12, 14, 13, 15, 14, 16]
 
 
