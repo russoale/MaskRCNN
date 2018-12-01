@@ -12,7 +12,7 @@ from mrcnn.roi_align_layer import PyramidROIAlign
 
 def fpn_classifier_graph(rois, feature_maps, image_meta,
                          pool_size, num_classes, train_bn=True,
-                         fc_layers_size=1024, num_keypoints=17):
+                         fc_layers_size=1024):
     """Builds the computation graph of the feature pyramid network classifier
     and regressor heads.
 
@@ -118,7 +118,8 @@ def build_fpn_mask_graph(rois, feature_maps, image_meta,
     return x
 
 
-def build_fpn_keypoint_graph(rois, feature_maps, pool_size, num_keypoints):
+def build_fpn_keypoint_graph(rois, feature_maps, image_meta,
+                             pool_size, num_keypoints):
     """Builds the computation graph of the keypoint head of Feature Pyramid Network.
 
     rois: [batch, num_rois, (y1, x1, y2, x2)] Proposal boxes in normalized
@@ -135,7 +136,8 @@ def build_fpn_keypoint_graph(rois, feature_maps, pool_size, num_keypoints):
 
     # ROI Pooling
     # Shape: [batch, num_rois, pool_height, pool_width, channels]
-    x = PyramidROIAlign([pool_size, pool_size], name="roi_align_keypoint_mask")([rois] + feature_maps)
+    x = PyramidROIAlign([pool_size, pool_size],
+                        name="roi_align_keypoint_mask")([rois, image_meta] + feature_maps)
     for i in range(8):
         x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                                name="mrcnn_keypoint_mask_conv{}".format(i + 1))(x)
