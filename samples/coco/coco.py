@@ -50,17 +50,23 @@ import shutil
 # Root directory of the project
 ROOT_DIR = os.path.abspath("../../")
 
+# Root directory to hdd
+DATA_DIR = os.path.abspath("/data/hdd/")
+
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn.config import Config
 from mrcnn import model as modellib, utils
 
-# Path to trained weights file
-COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
+# Local path to trained weights file
+COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_rcnn_coco.h5")
+
+# path to MSCOCO dataset
+COCO_DIR = os.path.join(DATA_DIR, "Datasets", "MSCOCO_2017")  # TODO: enter value here
 
 # Directory to save logs and model checkpoints, if not provided
 # through the command line argument --logs
-DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
+DEFAULT_LOGS_DIR = os.path.join(DATA_DIR, "russales", "logs")
 DEFAULT_DATASET_YEAR = "2017"
 
 
@@ -535,16 +541,18 @@ if __name__ == '__main__':
     parser.add_argument("command",
                         metavar="<command>",
                         help="'train' or 'evaluate' on MS COCO")
-    parser.add_argument('--dataset', required=True,
+    parser.add_argument('--dataset', required=False,
+                        default=COCO_DIR,
                         metavar="/path/to/coco/",
-                        help='Directory of the MS-COCO dataset')
+                        help="Directory of the MS-COCO dataset (default='/data/hdd/Datasets/MSCOCO_2017)'")
     parser.add_argument('--year', required=False,
                         default=DEFAULT_DATASET_YEAR,
                         metavar="<year>",
-                        help='Year of the MS-COCO dataset (2014 or 2017) (default=2014)')
-    parser.add_argument('--model', required=True,
+                        help='Year of the MS-COCO dataset (2014 or 2017) (default=2017)')
+    parser.add_argument('--model', required=False,
+                        default="coco",
                         metavar="/path/to/weights.h5",
-                        help="Path to weights .h5 file or 'coco'")
+                        help="Path to weights .h5 file or 'coco', 'last', 'imagenet' (default='coco'")
     parser.add_argument('--logs', required=False,
                         default=DEFAULT_LOGS_DIR,
                         metavar="/path/to/logs/",
@@ -558,6 +566,12 @@ if __name__ == '__main__':
                         metavar="<True|False>",
                         help='Automatically download and unzip MS-COCO files (default=False)',
                         type=bool)
+    parser.add_argument('--keypoint', required=False,
+                        default=True,
+                        metavar="<True|False>",
+                        help='Include Keypoint Detection (default=True)',
+                        type=bool)
+
     args = parser.parse_args()
     print("Command: ", args.command)
     print("Model: ", args.model)
@@ -603,20 +617,29 @@ if __name__ == '__main__':
 
     # Load weights
     print("Loading weights ", model_path)
-    model.load_weights(model_path, by_name=True)
+    if args.model.lower() == "coco":
+        model.load_weights(model_path, by_name=True, exclude = ["mrcnn_class_logits", "mrcnn_bbox_fc",
+                   "mrcnn_bbox", "mrcnn_mask"])
+    else:
+        model.load_weights(model_path, by_name=True)
 
     # Train or evaluate
     if args.command == "train":
+        if args.keypoint:
+            task_type = "person_keypoints"
+        else:
+            task_type = "instances"
+
         # Training dataset. Use the training set and 35K from the
         # validation set, as as in the Mask RCNN paper.
-        dataset_train = CocoDataset()
+        dataset_train = CocoDataset(task_type=task_type)
         dataset_train.load_coco(args.dataset, "train", year=args.year, auto_download=args.download)
         if args.year in '2014':
             dataset_train.load_coco(args.dataset, "valminusminival", year=args.year, auto_download=args.download)
         dataset_train.prepare()
 
         # Validation dataset
-        dataset_val = CocoDataset()
+        dataset_val = CocoDataset(task_type=task_type)
         val_type = "val" if args.year in '2017' else "minival"
         dataset_val.load_coco(args.dataset, val_type, year=args.year, auto_download=args.download)
         dataset_val.prepare()
@@ -639,7 +662,7 @@ if __name__ == '__main__':
         # Finetune layers from ResNet stage 4 and up
         print("Fine tune Resnet stage 4 and up")
         model.train(dataset_train, dataset_val,
-                    learning_rate=config.LEARNING_RATE,
+                    learning_rate=config.LEARNING_RATE / 100,
                     epochs=120,
                     layers='4+',
                     augmentation=augmentation)
@@ -648,7 +671,7 @@ if __name__ == '__main__':
         # Fine tune all layers
         print("Fine tune all layers")
         model.train(dataset_train, dataset_val,
-                    learning_rate=config.LEARNING_RATE / 10,
+                    learning_rate=config.LEARNING_RATE / 100,
                     epochs=160,
                     layers='all',
                     augmentation=augmentation)

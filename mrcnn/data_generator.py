@@ -456,12 +456,15 @@ def generate_random_rois(image_shape, count, gt_class_ids, gt_boxes):
     return rois
 
 
-def load_image_gt_keypoints(dataset, config, image_id, augment=True,
+def load_image_gt_keypoints(dataset, config, image_id, augment=False, augmentation=None,
                             use_mini_mask=False):
     """Load and return ground truth data for an image (image, keypoint_mask, keypoint_weight, mask, bounding boxes).
 
     augment: If true, apply random image augmentation. Currently, only
         horizontal flipping is offered.
+    augmentation: Optional. An imgaug (https://github.com/aleju/imgaug) augmentation.
+        For example, passing imgaug.augmenters.Fliplr(0.5) flips images
+        right/left 50% of the time.
     use_mini_mask: If False, returns full-size masks and keypoints that are the same height
         and width as the original image. These can be big, for example
         1024x1024x100 (for 100 instances). Mini masks are smaller, typically,
@@ -498,13 +501,54 @@ def load_image_gt_keypoints(dataset, config, image_id, augment=True,
     keypoints = utils.resize_keypoints(keypoints, image.shape[:2], scale, padding)
 
     # Random horizontal flips.
-
+    # TODO: will be removed in a future update in favor of augmentation
     if augment:
+        logging.warning("'augment' is deprecated. Use 'augmentation' instead.")
         if random.randint(0, 1):
             image = np.fliplr(image)
             mask = np.fliplr(mask)
             keypoint_names, keypoint_flip_map = utils.get_keypoints()
             keypoints = utils.flip_keypoints(keypoint_names, keypoint_flip_map, keypoints, image.shape[1])
+
+    # Augmentation
+    # This requires the imgaug lib (https://github.com/aleju/imgaug)
+    if augmentation:
+        import imgaug
+
+        # Augmenters that are safe to apply to masks
+        # Some, such as Affine, have settings that make them unsafe, so always
+        # test your augmentation on masks
+        MASK_AUGMENTERS = ["Sequential", "SomeOf", "OneOf", "Sometimes",
+                           "Fliplr", "Flipud", "CropAndPad",
+                           "Affine", "PiecewiseAffine"]
+
+        def hook(images, augmenter, parents, default):
+            """Determines which augmenters to apply to masks."""
+            return augmenter.__class__.__name__ in MASK_AUGMENTERS
+
+        # Store shapes before augmentation to compare
+        image_shape = image.shape
+        mask_shape = mask.shape
+        keypoint_shape = keypoints.shape
+        # Make augmenters deterministic to apply similarly to images and masks
+        det = augmentation.to_deterministic()
+        image = det.augment_image(image)
+        # Change mask to np.uint8 because imgaug doesn't support np.bool
+        hooks = imgaug.HooksImages(activator=hook)
+        mask = det.augment_image(mask.astype(np.uint8), hooks=hooks)
+        keypoints = det.augment_keypoints(keypoints, hooks=hooks)
+        # Verify that shapes didn't change
+        assert image.shape == image_shape, "Augmentation shouldn't change image size"
+        assert mask.shape == mask_shape, "Augmentation shouldn't change mask size"
+        assert keypoints.shape == keypoint_shape, "Augmentation shouldn't change keypoints size"
+        # Change mask back to bool
+        mask = mask.astype(np.bool)
+
+    # Note that some boxes might be all zeros if the corresponding mask got cropped out.
+    # and here is to filter them out
+    _idx = np.sum(mask, axis=(0, 1)) > 0
+    mask = mask[:, :, _idx]
+    class_ids = class_ids[_idx]
 
     # Bounding boxes. Note that some boxes might be all zeros
     # if the corresponding mask got cropped out.
@@ -517,8 +561,9 @@ def load_image_gt_keypoints(dataset, config, image_id, augment=True,
     # Different datasets have different classes, so track the
     # classes supported in the dataset of this image.
     active_class_ids = np.zeros([dataset.num_classes], dtype=np.int32)
+
     # all the class ids in the source
-    # in keypoint detection task, source_class_ids = [0,1]
+    # in keypoint detection task, source_class_ids = [0,1] //(BG, person)
     source_class_ids = dataset.source_class_ids[dataset.image_info[image_id]["source"]]
     active_class_ids[source_class_ids] = 1
 
@@ -534,8 +579,9 @@ def load_image_gt_keypoints(dataset, config, image_id, augment=True,
     return image, image_meta, class_ids, bbox, mask, keypoints
 
 
-def data_generator_keypoint(dataset, config, shuffle=True, augment=True, random_rois=0,
-                            batch_size=1, detection_targets=False):
+def data_generator_keypoint(dataset, config, shuffle=True, augment=False, augmentation=None,
+                            random_rois=0, batch_size=1, detection_targets=False,
+                            no_augmentation_sources=None):
     """A generator that returns images and corresponding target class ids,
     bounding box deltas, keypoint_masks, keypoint_weights, masks.
 
@@ -579,6 +625,7 @@ def data_generator_keypoint(dataset, config, shuffle=True, augment=True, random_
     image_index = -1
     image_ids = np.copy(dataset.image_ids)
     error_count = 0
+    no_augmentation_sources = no_augmentation_sources or []
 
     # Anchors
     # [anchor_count, (y1, x1, y2, x2)]
@@ -599,9 +646,20 @@ def data_generator_keypoint(dataset, config, shuffle=True, augment=True, random_
 
             # Get GT bounding boxes and masks for image.
             image_id = image_ids[image_index]
-            # image_meta:image_id,image_shape,windows.active_class_ids
-            image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints = \
-                load_image_gt_keypoints(dataset, config, image_id, augment, use_mini_mask=config.USE_MINI_MASK)
+
+            # If the image source is not to be augmented pass None as augmentation
+            if dataset.image_info[image_id]['source'] in no_augmentation_sources:
+                image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints = \
+                    load_image_gt_keypoints(dataset, config, image_id,
+                                            augment=augment,
+                                            augmentation=None,
+                                            use_mini_mask=config.USE_MINI_MASK)
+            else:
+                image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints = \
+                    load_image_gt_keypoints(dataset, config, image_id,
+                                            augment=augment,
+                                            augmentation=augmentation,
+                                            use_mini_mask=config.USE_MINI_MASK)
 
             Num_keypoint = np.shape(gt_keypoints)[1]
 
@@ -642,16 +700,11 @@ def data_generator_keypoint(dataset, config, shuffle=True, augment=True, random_
                     (batch_size, config.MAX_GT_INSTANCES), dtype=np.int32)
                 batch_gt_boxes = np.zeros(
                     (batch_size, config.MAX_GT_INSTANCES, 4), dtype=np.int32)
-
-                batch_gt_keypoints = np.zeros((batch_size, config.MAX_GT_INSTANCES, Num_keypoint, 3))
-
-                if config.USE_MINI_MASK:
-                    batch_gt_masks = np.zeros((batch_size, config.MINI_MASK_SHAPE[0], config.MINI_MASK_SHAPE[1],
-                                               config.MAX_GT_INSTANCES))
-
-                else:
-                    batch_gt_masks = np.zeros(
-                        (batch_size, image.shape[0], image.shape[1], config.MAX_GT_INSTANCES))
+                batch_gt_keypoints = np.zeros(
+                    (batch_size, config.MAX_GT_INSTANCES, Num_keypoint, 3))
+                batch_gt_masks = np.zeros(
+                    (batch_size, gt_masks.shape[0], gt_masks.shape[1],
+                     config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
 
                 # Not implemented for keypoint mask and no need here
                 if random_rois:
@@ -696,9 +749,6 @@ def data_generator_keypoint(dataset, config, shuffle=True, augment=True, random_
             b += 1
 
             # Batch full?
-            # input_image, input_image_meta,
-            #  input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_keypoint_masks,
-            #  input_gt_keypoint_weigths
             if b >= batch_size:
                 inputs = [batch_images, batch_image_meta, batch_rpn_match, batch_rpn_bbox,
                           batch_gt_class_ids, batch_gt_boxes, batch_gt_keypoints, batch_gt_masks]
