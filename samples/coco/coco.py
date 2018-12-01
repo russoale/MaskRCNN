@@ -63,6 +63,7 @@ COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 DEFAULT_DATASET_YEAR = "2014"
 
+
 ############################################################
 #  Configurations
 ############################################################
@@ -84,7 +85,22 @@ class CocoConfig(Config):
     # GPU_COUNT = 8
 
     # Number of classes (including background)
-    NUM_CLASSES = 1 + 80  # COCO has 80 classes
+    NUM_CLASSES = 1 + 1  # Person and background
+
+    NUM_KEYPOINTS = 17
+    MASK_SHAPE = [28, 28]
+    KEYPOINT_MASK_SHAPE = [56, 56]
+    # DETECTION_MAX_INSTANCES = 50
+    TRAIN_ROIS_PER_IMAGE = 100
+    MAX_GT_INSTANCES = 128
+    RPN_TRAIN_ANCHORS_PER_IMAGE = 150
+    USE_MINI_MASK = True
+    MASK_POOL_SIZE = 14
+    KEYPOINT_MASK_POOL_SIZE = 7
+    LEARNING_RATE = 0.002
+    STEPS_PER_EPOCH = 1000
+    WEIGHT_LOSS = True
+    KEYPOINT_THRESHOLD = 0.005
 
 
 ############################################################
@@ -92,6 +108,27 @@ class CocoConfig(Config):
 ############################################################
 
 class CocoDataset(utils.Dataset):
+
+    @property
+    def skeleton(self):
+        return self._skeleton
+
+    @property
+    def keypoint_names(self):
+        return self._keypoint_names
+
+    def __init__(self, task_type="instances", class_map=None):
+        assert task_type in ["instances", "person_keypoints"]
+        self.task_type = task_type
+        # the connection between 2 close keypoints
+        self._skeleton = []
+        # keypoint names
+        # ["nose","left_eye","right_eye","left_ear","right_ear","left_shoulder",
+        # "right_shoulder","left_elbow","right_elbow","left_wrist","right_wrist",
+        # "left_hip","right_hip","left_knee","right_knee","left_ankle","right_ankle"]
+        self._keypoint_names = []
+        super().__init__(class_map)
+
     def load_coco(self, dataset_dir, subset, year=DEFAULT_DATASET_YEAR, class_ids=None,
                   class_map=None, return_coco=False, auto_download=False):
         """Load a subset of the COCO dataset.
@@ -108,7 +145,7 @@ class CocoDataset(utils.Dataset):
         if auto_download is True:
             self.auto_download(dataset_dir, subset, year)
 
-        coco = COCO("{}/annotations/instances_{}{}.json".format(dataset_dir, subset, year))
+        coco = COCO("{}/annotations/{}_{}{}.json".format(dataset_dir, self.task_type, subset, year))
         if subset == "minival" or subset == "valminusminival":
             subset = "val"
         image_dir = "{}/{}{}".format(dataset_dir, subset, year)
@@ -142,6 +179,21 @@ class CocoDataset(utils.Dataset):
                 height=coco.imgs[i]["height"],
                 annotations=coco.loadAnns(coco.getAnnIds(
                     imgIds=[i], catIds=class_ids, iscrowd=None)))
+
+        if (self.task_type == "person_keypoints"):
+            # the connection between 2 close keypoints
+            self._skeleton = coco.loadCats(1)[0]["skeleton"]
+            # keypoint names
+            # ["nose","left_eye","right_eye","left_ear","right_ear","left_shoulder",
+            # "right_shoulder","left_elbow","right_elbow","left_wrist","right_wrist",
+            # "left_hip","right_hip","left_knee","right_knee","left_ankle","right_ankle"]
+            self._keypoint_names = coco.loadCats(1)[0]["keypoints"]
+
+            self._skeleton = np.array(self._skeleton, dtype=np.int32)
+
+            print("Skeleton:", np.shape(self._skeleton))
+            print("Keypoint names:", np.shape(self._keypoint_names))
+
         if return_coco:
             return coco
 
@@ -216,6 +268,65 @@ class CocoDataset(utils.Dataset):
                 zip_ref.extractall(unZipDir)
             print("... done unzipping")
         print("Will use annotations in " + annFile)
+
+    def load_keypoints(self, image_id):
+        """Load person keypoints for the given image.
+
+        Returns:
+        key_points: num_keypoints coordinates and visibility (x,y,v)  [num_person,num_keypoints,3] of num_person
+        masks: A bool array of shape [height, width, instance count] with
+            one mask per instance.
+        class_ids: a 1D array of class IDs of the instance masks, here is always equal to [num_person, 1]
+        """
+        # If not a COCO image, delegate to parent class.
+        image_info = self.image_info[image_id]
+        if image_info["source"] != "coco":
+            return super(CocoDataset, self).load_mask(image_id)
+
+        keypoints = []
+        class_ids = []
+        instance_masks = []
+        annotations = self.image_info[image_id]["annotations"]
+        # Build mask of shape [height, width, instance_count] and list
+        # of class IDs that correspond to each channel of the mask.
+        for annotation in annotations:
+            class_id = self.map_source_class_id(
+                "coco.{}".format(annotation['category_id']))
+            assert class_id == 1
+            if class_id:
+
+                # load masks
+                m = self.annToMask(annotation, image_info["height"],
+                                   image_info["width"])
+                # Some objects are so small that they're less than 1 pixel area
+                # and end up rounded out. Skip those objects.
+                if m.max() < 1:
+                    continue
+                # Is it a crowd? If so, use a negative class ID.
+                if annotation['iscrowd']:
+                    # Use negative class ID for crowds
+                    class_id *= -1
+                    # For crowd masks, annToMask() sometimes returns a mask
+                    # smaller than the given dimensions. If so, resize it.
+                    if m.shape[0] != image_info["height"] or m.shape[1] != image_info["width"]:
+                        m = np.ones([image_info["height"], image_info["width"]], dtype=bool)
+                instance_masks.append(m)
+                # load keypoints
+                keypoint = annotation["keypoints"]
+                keypoint = np.reshape(keypoint, (-1, 3))
+
+                keypoints.append(keypoint)
+                class_ids.append(class_id)
+
+        # Pack instance masks into an array
+        if class_ids:
+            keypoints = np.array(keypoints, dtype=np.int32)
+            class_ids = np.array(class_ids, dtype=np.int32)
+            masks = np.stack(instance_masks, axis=2)
+            return keypoints, masks, class_ids
+        else:
+            # Call super class to return an empty mask
+            return super(CocoDataset, self).load_keypoints(image_id)
 
     def load_mask(self, image_id):
         """Load instance masks for the given image.
@@ -446,6 +557,8 @@ if __name__ == '__main__':
             GPU_COUNT = 1
             IMAGES_PER_GPU = 1
             DETECTION_MIN_CONFIDENCE = 0
+
+
         config = InferenceConfig()
     config.display()
 
@@ -525,7 +638,8 @@ if __name__ == '__main__':
         # Validation dataset
         dataset_val = CocoDataset()
         val_type = "val" if args.year in '2017' else "minival"
-        coco = dataset_val.load_coco(args.dataset, val_type, year=args.year, return_coco=True, auto_download=args.download)
+        coco = dataset_val.load_coco(args.dataset, val_type, year=args.year, return_coco=True,
+                                     auto_download=args.download)
         dataset_val.prepare()
         print("Running COCO evaluation on {} images.".format(args.limit))
         evaluate_coco(model, dataset_val, coco, "bbox", limit=int(args.limit))

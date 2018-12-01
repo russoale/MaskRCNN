@@ -16,7 +16,7 @@ import colorsys
 import numpy as np
 from skimage.measure import find_contours
 import matplotlib.pyplot as plt
-from matplotlib import patches,  lines
+from matplotlib import patches, lines
 from matplotlib.patches import Polygon
 import IPython.display
 
@@ -53,6 +53,149 @@ def display_images(images, titles=None, cols=4, cmap=None, norm=None,
         plt.imshow(image.astype(np.uint8), cmap=cmap,
                    norm=norm, interpolation=interpolation)
         i += 1
+    plt.show()
+
+
+def display_image_keypoint_mask(image, boxes, keypoints, keypoint_weight, class_ids, class_names, config,
+                                iskeypointlabel=True):
+    """
+       keypoints: [num_instance, num_keypoints] Every value is a int label which indicates the position ([0,56*56)) of the joint
+       keypoint_weight: [num_instance, num_keypoints]
+            0：the keypint is not in the roi or not visible
+            1: the keypoint is in the roi and is visible and annotated
+       class_ids: [num_instances]
+       class_names: list of class names of the dataset
+       """
+    non_zeros = class_ids > 0
+    boxes = boxes[non_zeros]
+    keypoint_weight = keypoint_weight[non_zeros, :]
+    class_ids = class_ids[non_zeros]
+    if (iskeypointlabel):  # convert the label of joint into coordinate
+        keypoint_label = keypoints[non_zeros, :]
+        J_y = keypoint_label // config.KEYPOINT_MASK_SHAPE[1]
+        J_x = keypoint_label % config.KEYPOINT_MASK_SHAPE[1]
+        box_scales = np.array([image.shape[0], image.shape[1], image.shape[0], image.shape[1]])
+        box_scales = np.reshape(box_scales, (1, -1))
+        boxes = np.array(boxes * box_scales)
+        box_height = boxes[:, 2] - boxes[:, 0]
+        box_width = boxes[:, 3] - boxes[:, 1]
+        x_scale = box_width / config.KEYPOINT_MASK_SHAPE[1]
+        y_scale = box_height / config.KEYPOINT_MASK_SHAPE[0]
+        x_scale = np.expand_dims(x_scale, -1)
+        y_scale = np.expand_dims(y_scale, -1)
+        x_shift = boxes[:, 1]
+        y_shift = boxes[:, 0]
+        x_shift = np.expand_dims(x_shift, -1)
+        y_shift = np.expand_dims(y_shift, -1)
+
+        J_x = np.array(x_scale * J_x + 0.5).astype(int) + x_shift
+        J_y = np.array(y_scale * J_y + 0.5).astype(int) + y_shift
+        J_x = np.expand_dims(J_x, -1)
+        J_y = np.expand_dims(J_y, -1)
+        J_v = np.expand_dims(keypoint_weight, -1)
+
+        keypoints = np.concatenate([J_x, J_y, J_v], 2)
+
+    else:
+
+        y1 = boxes[:, 0]
+        x1 = boxes[:, 1]
+        y2 = boxes[:, 2]
+        x2 = boxes[:, 3]
+        h = y2 - y1
+        w = x2 - x1
+        h = np.expand_dims(h, -1)
+        w = np.expand_dims(w, -1)
+        x1 = np.expand_dims(x1, -1)
+        x2 = np.expand_dims(x2, -1)
+        y1 = np.expand_dims(y1, -1)
+        y2 = np.expand_dims(y2, -1)
+        keypoints = keypoints[non_zeros, :, :]
+        heatmap_scale_h = h * image.shape[0] / config.KEYPOINT_MASK_SHAPE[0]
+        heatmap_scale_w = w * image.shape[1] / config.KEYPOINT_MASK_SHAPE[1]
+
+        keypoints[:, :, 0] = keypoints[:, :, 0] * heatmap_scale_w + x1 * image.shape[1]
+        keypoints[:, :, 1] = keypoints[:, :, 1] * heatmap_scale_h + y1 * image.shape[0]
+
+        box_scales = np.array([image.shape[0], image.shape[1], image.shape[0], image.shape[1]])
+        box_scales = np.reshape(box_scales, (1, -1))
+        boxes = np.array(boxes * box_scales)
+
+    display_keypoints(image, boxes, keypoints, class_ids, class_names)
+
+
+def display_keypoints(image, boxes, keypoints, class_ids, class_names,
+                      skeleton=None, scores=None, title="",
+                      figsize=(16, 16), ax=None):
+    """
+    boxes: [num_persons, (y1, x1, y2, x2)] in image coordinates.
+    keypoints: [num_persons, 3]
+    class_ids: [num_persons]
+    class_names: list of class names of the dataset
+    scores: (optional) confidence scores for each box
+    figsize: (optional) the size of the image.
+    """
+    # Number of persons
+    N = boxes.shape[0]
+    if not N:
+        print("\n*** No persons to display *** \n")
+    else:
+        assert boxes.shape[0] == keypoints.shape[0] == class_ids.shape[0]
+
+    if not ax:
+        _, ax = plt.subplots(1, figsize=figsize)
+
+    # Generate random colors
+    colors = random_colors(N)
+
+    # Show area outside image boundaries.
+    height, width = image.shape[:2]
+    ax.set_ylim(height + 10, -10)
+    ax.set_xlim(-10, width + 10)
+    ax.axis('off')
+    ax.set_title(title)
+    skeleton_image = image.astype(np.float32).copy()
+    for i in range(N):
+        color = colors[i]
+
+        # Bounding box
+        if not np.any(boxes[i]):
+            # Skip this instance. Has no bbox. Likely lost in image cropping.
+            continue
+        y1, x1, y2, x2 = boxes[i]
+        p = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2,
+                              alpha=0.7, linestyle="dashed",
+                              edgecolor=color, facecolor='none')
+        ax.add_patch(p)
+
+        # Label
+        class_id = class_ids[i]
+        score = scores[i] if scores is not None else None
+        label = class_names[class_id]
+        # x = random.randint(x1, (x1 + x2) // 2)
+        caption = "{} {:.3f}".format(label, score) if score else label
+        ax.text(x1, y1 + 8, caption,
+                color='w', size=11, backgroundcolor="none")
+        # Keypoints: num_person, num_keypoint, 3
+        for Joint in keypoints[i]:
+            if (Joint[2] != 0):
+                circle = patches.Circle((Joint[0], Joint[1]), radius=1, edgecolor=color, facecolor='none')
+                ax.add_patch(circle)
+
+        # Skeleton: 19*2
+        if (skeleton != None):
+            for connection in skeleton:
+                joint_start, joint_end = connection - 1  # connection stats from 1 to 17
+
+                Joint_start = keypoints[i][joint_start]
+                Joint_end = keypoints[i][joint_end]
+                # both are Annotated
+                # Joint:(x,y,v)
+                if ((Joint_start[2] != 0) & (Joint_end[2] != 0)):
+                    # print(color)
+
+                    cv2.line(skeleton_image, tuple(Joint_start[:2]), tuple(Joint_end[:2]), [x * 255 for x in color])
+    ax.imshow(skeleton_image.astype(np.uint8))
     plt.show()
 
 
@@ -131,8 +274,8 @@ def display_instances(image, boxes, masks, class_ids, class_names,
         y1, x1, y2, x2 = boxes[i]
         if show_bbox:
             p = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2,
-                                alpha=0.7, linestyle="dashed",
-                                edgecolor=color, facecolor='none')
+                                  alpha=0.7, linestyle="dashed",
+                                  edgecolor=color, facecolor='none')
             ax.add_patch(p)
 
         # Label
@@ -181,8 +324,8 @@ def display_differences(image,
         pred_box, pred_class_id, pred_score, pred_mask,
         iou_threshold=iou_threshold, score_threshold=score_threshold)
     # Ground truth = green. Predictions = red
-    colors = [(0, 1, 0, .8)] * len(gt_match)\
-           + [(1, 0, 0, 1)] * len(pred_match)
+    colors = [(0, 1, 0, .8)] * len(gt_match) \
+             + [(1, 0, 0, 1)] * len(pred_match)
     # Concatenate GT and predictions
     class_ids = np.concatenate([gt_class_id, pred_class_id])
     scores = np.concatenate([np.zeros([len(gt_match)]), pred_score])
@@ -192,8 +335,8 @@ def display_differences(image,
     captions = ["" for m in gt_match] + ["{:.2f} / {:.2f}".format(
         pred_score[i],
         (overlaps[i, int(pred_match[i])]
-            if pred_match[i] > -1 else overlaps[i].max()))
-            for i in range(len(pred_match))]
+         if pred_match[i] > -1 else overlaps[i].max()))
+        for i in range(len(pred_match))]
     # Set title if not provided
     title = title or "Ground Truth and Detections\n GT=green, pred=red, captions: score/IoU"
     # Display
@@ -255,7 +398,7 @@ def draw_rois(image, rois, refined_rois, mask, class_ids, class_names, limit=10)
 
             # Mask
             m = utils.unmold_mask(mask[id], rois[id]
-                                  [:4].astype(np.int32), image.shape)
+            [:4].astype(np.int32), image.shape)
             masked_image = apply_mask(masked_image, m, color)
 
     ax.imshow(masked_image)
@@ -347,7 +490,7 @@ def plot_overlaps(gt_class_ids, pred_class_ids, pred_scores,
             text = "match" if gt_class_ids[j] == pred_class_ids[i] else "wrong"
         color = ("white" if overlaps[i, j] > thresh
                  else "black" if overlaps[i, j] > 0
-                 else "grey")
+        else "grey")
         plt.text(j, i, "{:.3f}\n{}".format(overlaps[i, j], text),
                  horizontalalignment="center", verticalalignment="center",
                  fontsize=9, color=color)

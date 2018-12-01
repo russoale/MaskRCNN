@@ -15,7 +15,7 @@ def smooth_l1_loss(y_true, y_pred):
     """
     diff = K.abs(y_true - y_pred)
     less_than_one = K.cast(K.less(diff, 1.0), "float32")
-    loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
+    loss = (less_than_one * 0.5 * diff ** 2) + (1 - less_than_one) * (diff - 0.5)
     return loss
 
 
@@ -176,4 +176,165 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
                     K.binary_crossentropy(target=y_true, output=y_pred),
                     tf.constant(0.0))
     loss = K.mean(loss)
+    return loss
+
+
+def keypoint_weight_loss_graph(target_keypoint_weight, pred_class, target_class_ids):
+    """Loss for Mask class R-CNN whether key points are in picture.
+
+        target_mask_class: [batch, num_rois, 17(number of keypoints)]
+        pred_class: [batch, num_rois, num_classes, 2]
+        target_class_ids: [batch, num_rois]. Integer class IDs.
+    """
+    # Reshape to merge batch and roi dimensions for simplicity.
+    target_mask_class = tf.cast(target_keypoint_weight, tf.int64)
+    target_class_ids = K.reshape(target_class_ids, (-1,))
+    pred_class = K.reshape(pred_class, (-1, 17, K.int_shape(pred_class)[3]))
+    target_mask_class = tf.cast(K.reshape(target_mask_class, (-1, 17)), tf.int64)
+
+    positive_roi_ix = tf.where(target_class_ids > 0)[:, 0]
+
+    # Gather the positive classes (predicted and true) that contribute to loss
+    target_class = tf.gather(target_mask_class, positive_roi_ix)
+    pred_class = tf.gather(pred_class, positive_roi_ix)
+
+    # Loss
+    loss = K.switch(tf.size(target_class) > 0,
+                    lambda: tf.nn.sparse_softmax_cross_entropy_with_logits(labels=target_class, logits=pred_class),
+                    lambda: tf.constant(0.0))
+    # Computer loss mean. Use only predictions that contribute
+    # to the loss to get a correct mean.
+    loss = tf.reduce_mean(loss)
+    return loss
+
+
+def test_keypoint_mrcnn_mask_loss_graph(target_keypoints, target_keypoint_weights, target_class_ids,
+                                        pred_keypoint_logits, mask_shape=[56, 56], number_point=17):
+    """
+    This function is just use for inspecting the keypoint_mrcnn_mask_loss_graph
+    target_keypoints: [batch, num_rois, num_keypoints].
+        A int32 tensor of values between[0, 56*56). Uses zero padding to fill array.
+    keypoint_weight:[batch, num_person, num_keypoint]
+        0: not visible for the coressponding roi
+        1: visible for the coressponding roi
+    target_class_ids: [batch, num_rois]. Integer class IDs. Zero padded.
+    pred_keypoints_logit: [batch, proposals, num_keypoints, height*width] float32 tensor
+                with values from 0 to 1.
+       """
+
+    # Reshape for simplicity. Merge first two dimensions into one.
+    pred_keypoint_logits = KL.Lambda(lambda x: x * 1, name="pred_keypoint")(pred_keypoint_logits)
+    target_keypoints = KL.Lambda(lambda x: x * 1, name="target_keypoint")(target_keypoints)
+    target_class_ids = KL.Lambda(lambda x: K.reshape(x, (-1,)), name="target_class_ids_reshape")(target_class_ids)
+
+    target_keypoints = KL.Lambda(lambda x: K.reshape(x, (-1, number_point)), name="target_keypoint_reshape")(
+        target_keypoints)
+
+    # reshape target_keypoint_weights to [N, 17]
+    target_keypoint_weights = KL.Lambda(lambda x: K.reshape(x, (-1, number_point)),
+                                        name="target_keypoint_weights_reshape")(target_keypoint_weights)
+
+    # reshape pred_keypoint_masks to [N, 17, 56*56]
+    pred_keypoints_logits = KL.Lambda(lambda x: K.reshape(x, (-1, number_point, mask_shape[0] * mask_shape[1])),
+                                      name="pred_keypoint_reshape")(pred_keypoint_logits)
+
+    # Only positive person ROIs contribute to the loss. And only
+    # the people specific mask of each ROI.
+    # positive_people_ix = tf.where(target_class_ids > 0)[:, 0]
+    positive_people_ix = KL.Lambda(lambda x: tf.where(x > 0)[:, 0], name="positive_people_ix")(target_class_ids)
+
+    positive_people_ids = tf.cast(
+        tf.gather(target_class_ids, positive_people_ix), tf.int64)
+
+    # Gather the keypoint masks (predicted and true) that contribute to loss
+    # shape: [N_positive, 17]
+    positive_target_keypoints = KL.Lambda(lambda x: tf.gather(x[0], tf.cast(x[1], tf.int64)),
+                                          name="positive_target_keypoints")([target_keypoints, positive_people_ix])
+    # positive_target_keypoint_masks = tf.gather(target_keypoint_masks, positive_people_ix)
+
+    # positive target_keypoint_weights to[N_positive, 17]
+    positive_keypoint_weights = KL.Lambda(lambda x: tf.cast(tf.gather(x[0], tf.cast(x[1], tf.int64)), tf.int64),
+                                          name="positive_keypoint_weights")(
+        [target_keypoint_weights, positive_people_ix])
+    # positive target_keypoint_weights to[N_positive, 17, 56*56]
+    positive_pred_keypoints_logits = KL.Lambda(lambda x: tf.gather(x[0], tf.cast(x[1], tf.int64)),
+                                               name="positive_pred_keypoint_masks")(
+        [pred_keypoints_logits, positive_people_ix])
+
+    positive_target_keypoints = tf.cast(positive_target_keypoints, tf.int32)
+    loss = KL.Lambda(lambda x:
+                     K.switch(tf.size(x[0]) > 0,
+                              lambda: tf.nn.sparse_softmax_cross_entropy_with_logits(labels=tf.cast(x[0], tf.int32),
+                                                                                     logits=x[1]),
+                              lambda: tf.constant(0.0)), name="soft_loss")(
+        [positive_target_keypoints, positive_pred_keypoints_logits])
+
+    loss = KL.Lambda(lambda x: x * tf.cast(positive_keypoint_weights, tf.float32), name="positive_loss")(loss)
+    num_valid = KL.Lambda(lambda x: tf.reduce_sum(tf.cast(x, tf.float32)), name="num_valid")(positive_keypoint_weights)
+    loss = KL.Lambda(lambda x:
+                     K.switch(x[1] > 0,
+                              lambda: tf.reduce_sum(x[0]) / x[1],
+                              lambda: tf.constant(0.0)
+                              ), name="keypoint_loss")([loss, num_valid])
+    return loss
+
+
+def keypoint_mrcnn_mask_loss_graph(target_keypoints, target_keypoint_weights, target_class_ids, pred_keypoints_logit,
+                                   weight_loss=True, mask_shape=[56, 56], number_point=17):
+    """Mask softmax cross-entropy loss for the keypoint head.
+
+    target_keypoints: [batch, num_rois, num_keypoints].
+        A int32 tensor of values between[0, 56*56). Uses zero padding to fill array.
+    keypoint_weight:[num_person, num_keypoint]
+        0: not visible for the coressponding roi
+        1: visible for the coressponding roi
+    target_class_ids: [batch, num_rois]. Integer class IDs. Zero padded.
+    pred_keypoints_logit: [batch, proposals, num_keypoints, height*width] float32 tensor
+                with values from 0 to 1.
+    """
+
+    # Reshape for simplicity. Merge first two dimensions into one.
+    # shape:[N]
+    target_class_ids = K.reshape(target_class_ids, (-1,))
+    # Only positive person ROIs contribute to the loss. And only
+    # the people specific mask of each ROI.
+    positive_people_ix = tf.where(target_class_ids > 0)[:, 0]
+    positive_people_ids = tf.cast(
+        tf.gather(target_class_ids, positive_people_ix), tf.int64)
+
+    ###Step 1 Get the positive target and predict keypoint masks
+    # reshape target_keypoint_weights to [N, num_keypoints]
+    target_keypoint_weights = K.reshape(target_keypoint_weights, (-1, number_point))
+    # reshape target_keypoint_masks to [N, 17]
+    target_keypoints = K.reshape(target_keypoints, (
+        -1, number_point))
+
+    # reshape pred_keypoint_masks to [N, 17, 56*56]
+    pred_keypoints_logit = K.reshape(pred_keypoints_logit,
+                                     (-1, number_point, mask_shape[0] * mask_shape[1]))
+
+    # Gather the keypoint masks (target and predict) that contribute to loss
+    # shape: [N_positive, 17]
+    positive_target_keypoints = tf.cast(tf.gather(target_keypoints, positive_people_ix), tf.int32)
+    # shape: [N_positive,17, 56*56]
+    positive_pred_keypoints_logit = tf.gather(pred_keypoints_logit, positive_people_ix)
+    # positive target_keypoint_weights to[N_positive, 17]
+    positive_keypoint_weights = tf.cast(
+        tf.gather(target_keypoint_weights, positive_people_ix), tf.float32)
+
+    loss = K.switch(tf.size(positive_target_keypoints) > 0,
+                    lambda: tf.nn.sparse_softmax_cross_entropy_with_logits(logits=positive_pred_keypoints_logit,
+                                                                           labels=positive_target_keypoints),
+                    lambda: tf.constant(0.0))
+    loss = loss * positive_keypoint_weights
+
+    if (weight_loss):
+        loss = K.switch(tf.reduce_sum(positive_keypoint_weights) > 0,
+                        lambda: tf.reduce_sum(loss) / tf.reduce_sum(positive_keypoint_weights),
+                        lambda: tf.constant(0.0)
+                        )
+    else:
+        loss = K.mean(loss)
+    loss = tf.reshape(loss, [1, 1])
+
     return loss

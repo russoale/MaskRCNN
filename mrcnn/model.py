@@ -25,12 +25,13 @@ from mrcnn import utils
 from distutils.version import LooseVersion
 
 from mrcnn.data_formatting import compose_image_meta, parse_image_meta_graph, mold_image
-from mrcnn.data_generator import data_generator
+from mrcnn.data_generator import data_generator, data_generator_keypoint
 from mrcnn.detection_layer import DetectionLayer
 from mrcnn.detection_target_layer import DetectionTargetLayer
-from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph
+from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph, build_fpn_keypoint_graph
+from mrcnn.keypoint_layer import DetectionKeypointTargetLayer
 from mrcnn.loss_functions import rpn_class_loss_graph, rpn_bbox_loss_graph, mrcnn_class_loss_graph, \
-    mrcnn_bbox_loss_graph, mrcnn_mask_loss_graph
+    mrcnn_bbox_loss_graph, mrcnn_mask_loss_graph, keypoint_mrcnn_mask_loss_graph
 from mrcnn.misc_functions import norm_boxes_graph
 from mrcnn.proposal_layer import ProposalLayer
 from mrcnn.resnet import resnet_graph
@@ -39,6 +40,7 @@ from mrcnn.utility_functions import log, compute_backbone_shapes
 
 assert LooseVersion(tf.__version__) >= LooseVersion("1.3")
 assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
+
 
 ############################################################
 #  MaskRCNN Class
@@ -73,7 +75,7 @@ class MaskRCNN():
 
         # Image size must be dividable by 2 multiple times
         h, w = config.IMAGE_SHAPE[:2]
-        if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
+        if h / 2 ** 6 != int(h / 2 ** 6) or w / 2 ** 6 != int(w / 2 ** 6):
             raise Exception("Image size must be dividable by 2 at least 6 times "
                             "to avoid fractions when downscaling and upscaling."
                             "For example, use 256, 320, 384, 448, 512, ... etc. ")
@@ -101,6 +103,10 @@ class MaskRCNN():
             # Normalize coordinates
             gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
+
+            keypoint_scale = K.cast(K.stack([w, h, 1], axis=0), tf.float32)
+            input_gt_keypoints = KL.Input(shape=[None, config.NUM_KEYPOINTS, 3])
+            gt_keypoints = KL.Lambda(lambda x: x / keypoint_scale, name="gt_keypoints")(input_gt_keypoints)
             # 3. GT Masks (zero padded)
             # [batch, height, width, MAX_GT_INSTANCES]
             if config.USE_MINI_MASK:
@@ -183,7 +189,7 @@ class MaskRCNN():
         # Generate proposals
         # Proposals are [batch, N, (y1, x1, y2, x2)] in normalized coordinates
         # and zero padded.
-        proposal_count = config.POST_NMS_ROIS_TRAINING if mode == "training"\
+        proposal_count = config.POST_NMS_ROIS_TRAINING if mode == "training" \
             else config.POST_NMS_ROIS_INFERENCE
         rpn_rois = ProposalLayer(
             proposal_count=proposal_count,
@@ -196,7 +202,7 @@ class MaskRCNN():
             # came from.
             active_class_ids = KL.Lambda(
                 lambda x: parse_image_meta_graph(x)["active_class_ids"]
-                )(input_image_meta)
+            )(input_image_meta)
 
             if not config.USE_RPN_ROIS:
                 # Ignore predicted ROIs and use ROIs provided as an input.
@@ -212,13 +218,14 @@ class MaskRCNN():
             # Subsamples proposals and generates target outputs for training
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
-            rois, target_class_ids, target_bbox, target_mask =\
-                DetectionTargetLayer(config, name="proposal_targets")([
-                    target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+
+            rois, target_class_ids, target_bbox, target_keypoint, target_keypoint_weight, target_mask = \
+                DetectionKeypointTargetLayer(config, name="proposal_targets")([
+                    target_rois, input_gt_class_ids, gt_boxes, gt_keypoints, input_gt_masks])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox = \
                 fpn_classifier_graph(rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
                                      train_bn=config.TRAIN_BN,
@@ -229,6 +236,11 @@ class MaskRCNN():
                                               config.MASK_POOL_SIZE,
                                               config.NUM_CLASSES,
                                               train_bn=config.TRAIN_BN)
+
+            keypoint_mrcnn_mask = build_fpn_keypoint_graph(rois, mrcnn_feature_maps,
+                                                           config.IMAGE_SHAPE,
+                                                           config.KEYPOINT_MASK_POOL_SIZE,
+                                                           config.NUM_KEYPOINTS)
 
             # TODO: clean up (use tf.identify if necessary)
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
@@ -244,21 +256,25 @@ class MaskRCNN():
                 [target_bbox, target_class_ids, mrcnn_bbox])
             mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
                 [target_mask, target_class_ids, mrcnn_mask])
+            keypoint_loss = KL.Lambda(lambda x: keypoint_mrcnn_mask_loss_graph(*x, weight_loss=config.WEIGHT_LOSS),
+                                      name="keypoint_mrcnn_mask_loss")(
+                [target_keypoint, target_keypoint_weight, target_class_ids, keypoint_mrcnn_mask])
 
             # Model
             inputs = [input_image, input_image_meta,
-                      input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_masks]
+                      input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, input_gt_keypoints,
+                      input_gt_masks]
             if not config.USE_RPN_ROIS:
                 inputs.append(input_rois)
             outputs = [rpn_class_logits, rpn_class, rpn_bbox,
-                       mrcnn_class_logits, mrcnn_class, mrcnn_bbox, mrcnn_mask,
+                       mrcnn_class_logits, mrcnn_class, mrcnn_bbox, keypoint_mrcnn_mask,
                        rpn_rois, output_rois,
-                       rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
-            model = KM.Model(inputs, outputs, name='mask_rcnn')
+                       rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, keypoint_loss, mask_loss]
+            model = KM.Model(inputs, outputs, name='mask_keypoint_mrcnn')
         else:
             # Network Heads
             # Proposal classifier and BBox regressor heads
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox = \
                 fpn_classifier_graph(rpn_rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
                                      train_bn=config.TRAIN_BN,
@@ -277,11 +293,16 @@ class MaskRCNN():
                                               config.MASK_POOL_SIZE,
                                               config.NUM_CLASSES,
                                               train_bn=config.TRAIN_BN)
+            keypoint_mrcnn = build_fpn_keypoint_graph(detection_boxes, mrcnn_feature_maps,
+                                                      config.IMAGE_SHAPE,
+                                                      config.KEYPOINT_MASK_POOL_SIZE,
+                                                      config.NUM_KEYPOINTS)
 
-            model = KM.Model([input_image, input_image_meta, input_anchors],
-                             [detections, mrcnn_class, mrcnn_bbox,
-                                 mrcnn_mask, rpn_rois, rpn_class, rpn_bbox],
-                             name='mask_rcnn')
+            keypoint_mcrcnn_prob = KL.Activation("softmax", name="mrcnn_prob")(keypoint_mrcnn)
+            model = KM.Model([input_image, input_image_meta],
+                             [detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask,
+                              keypoint_mcrcnn_prob],
+                             name='keypoint_mask_rcnn')
 
         # Add multi-GPU support.
         if config.GPU_COUNT > 1:
@@ -346,7 +367,7 @@ class MaskRCNN():
         # In multi-GPU training, we wrap the model. Get layers
         # of the inner model because they have the weights.
         keras_model = self.keras_model
-        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model")\
+        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model") \
             else keras_model.layers
 
         # Exclude some layers
@@ -368,8 +389,8 @@ class MaskRCNN():
         Returns path to weights file.
         """
         from keras.utils.data_utils import get_file
-        TF_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/'\
-                                 'releases/download/v0.2/'\
+        TF_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/' \
+                                 'releases/download/v0.2/' \
                                  'resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5'
         weights_path = get_file('resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5',
                                 TF_WEIGHTS_PATH_NO_TOP,
@@ -389,16 +410,15 @@ class MaskRCNN():
         # First, clear previously set losses to avoid duplication
         self.keras_model._losses = []
         self.keras_model._per_input_losses = {}
-        loss_names = [
-            "rpn_class_loss",  "rpn_bbox_loss",
-            "mrcnn_class_loss", "mrcnn_bbox_loss", "mrcnn_mask_loss"]
+        loss_names = ["rpn_class_loss", "rpn_bbox_loss",
+                      "mrcnn_class_loss", "mrcnn_bbox_loss", "keypoint_mrcnn_mask_loss", "mrcnn_mask_loss"]
         for name in loss_names:
             layer = self.keras_model.get_layer(name)
             if layer.output in self.keras_model.losses:
                 continue
             loss = (
-                tf.reduce_mean(layer.output, keepdims=True)
-                * self.config.LOSS_WEIGHTS.get(name, 1.))
+                    tf.reduce_mean(layer.output, keepdims=True)
+                    * self.config.LOSS_WEIGHTS.get(name, 1.))
             self.keras_model.add_loss(loss)
 
         # Add L2 Regularization
@@ -421,8 +441,8 @@ class MaskRCNN():
             layer = self.keras_model.get_layer(name)
             self.keras_model.metrics_names.append(name)
             loss = (
-                tf.reduce_mean(layer.output, keepdims=True)
-                * self.config.LOSS_WEIGHTS.get(name, 1.))
+                    tf.reduce_mean(layer.output, keepdims=True)
+                    * self.config.LOSS_WEIGHTS.get(name, 1.))
             self.keras_model.metrics_tensors.append(loss)
 
     def set_trainable(self, layer_regex, keras_model=None, indent=0, verbose=1):
@@ -437,7 +457,7 @@ class MaskRCNN():
 
         # In multi-GPU training, we wrap the model. Get layers
         # of the inner model because they have the weights.
-        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model")\
+        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model") \
             else keras_model.layers
 
         for layer in layers:
@@ -550,13 +570,21 @@ class MaskRCNN():
         if layers in layer_regex.keys():
             layers = layer_regex[layers]
 
-        # Data generators
-        train_generator = data_generator(train_dataset, self.config, shuffle=True,
-                                         augmentation=augmentation,
-                                         batch_size=self.config.BATCH_SIZE,
-                                         no_augmentation_sources=no_augmentation_sources)
-        val_generator = data_generator(val_dataset, self.config, shuffle=True,
-                                       batch_size=self.config.BATCH_SIZE)
+        # Data keypoint generators
+
+        train_generator = data_generator_keypoint(train_dataset, self.config, shuffle=True,
+                                                  batch_size=self.config.BATCH_SIZE, augment=True)
+        val_generator = data_generator_keypoint(val_dataset, self.config, shuffle=True,
+                                                batch_size=self.config.BATCH_SIZE,
+                                                augment=False)
+
+        # # Data generators
+        # train_generator = data_generator(train_dataset, self.config, shuffle=True,
+        #                                  augmentation=augmentation,
+        #                                  batch_size=self.config.BATCH_SIZE,
+        #                                  no_augmentation_sources=no_augmentation_sources)
+        # val_generator = data_generator(val_dataset, self.config, shuffle=True,
+        #                                batch_size=self.config.BATCH_SIZE)
 
         # Create log_dir if it does not exist
         if not os.path.exists(self.log_dir):
@@ -701,10 +729,85 @@ class MaskRCNN():
             # Convert neural network mask to full size mask
             full_mask = utils.unmold_mask(masks[i], boxes[i], original_image_shape)
             full_masks.append(full_mask)
-        full_masks = np.stack(full_masks, axis=-1)\
+        full_masks = np.stack(full_masks, axis=-1) \
             if full_masks else np.empty(original_image_shape[:2] + (0,))
 
         return boxes, class_ids, scores, full_masks
+
+    def unmold_keypoint_detections(self, detections, mrcnn_keypoints, image_shape, window, mrcnn_mask,
+                                   keypoint_threshold=0.05):
+        """Reformats the detections of one image from the format of the neural
+        network output to a format suitable for use in the rest of the
+        application.
+
+        detections: [N, (y1, x1, y2, x2, class_id, score)]
+        mrcnn_keypoints: [N, num_keypoints, height*width]
+        image_shape: [height, width, depth] Original size of the image before resizing
+        window: [y1, x1, y2, x2] Box in the image where the real image is
+                excluding the padding.
+
+        Returns:
+        boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+        class_ids: [N] Integer class IDs for each bounding box
+        scores: [N] Float probability scores of the class_id
+        masks: [height, width, N] Instance masks
+        keypoints:[N, num_keypoints]
+        """
+        # How many detections do we have?
+        # Detections array is padded with zeros. Find the first class_id == 0.
+        zero_ix = np.where(detections[:, 4] == 0)[0]
+        N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
+
+        # Extract boxes, class_ids, scores, and class-specific masks
+        boxes = detections[:N, :4]
+        class_ids = detections[:N, 4].astype(np.int32)
+        scores = detections[:N, 5]
+        masks = mrcnn_mask[np.arange(N), :, :, class_ids]
+        mrcnn_keypoints = mrcnn_keypoints[:N, :, :]
+
+        # Compute scale and shift to translate coordinates to image domain.
+        h_scale = image_shape[0] / (window[2] - window[0])
+        w_scale = image_shape[1] / (window[3] - window[1])
+        scale = min(h_scale, w_scale)
+        shift = window[:2]  # y, x
+        scales = np.array([scale, scale, scale, scale])
+        shifts = np.array([shift[0], shift[1], shift[0], shift[1]])
+
+        # Translate bounding boxes to image domain
+        boxes = np.multiply(boxes - shifts, scales).astype(np.int32)
+        # print("boxes:",boxes)
+        # print("shifts:",shift)
+        # print("scales:",scales)
+
+        # Filter out detections with zero area. Often only happens in early
+        # stages of training when the network weights are still a bit random.
+        exclude_ix = np.where(
+            (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
+        if exclude_ix.shape[0] > 0:
+            boxes = np.delete(boxes, exclude_ix, axis=0)
+            class_ids = np.delete(class_ids, exclude_ix, axis=0)
+            scores = np.delete(scores, exclude_ix, axis=0)
+            mrcnn_keypoints = np.delete(mrcnn_keypoints, exclude_ix, axis=0)
+            masks = np.delete(masks, exclude_ix, axis=0)
+            N = class_ids.shape[0]
+
+        # Resize masks to original image size and set boundary threshold.
+
+        keypoints = []
+        full_masks = []
+        for i in range(N):
+            # Convert neural network mask to full size mask
+            keypoint, full_mask = utils.unmold_keypoint_mask(mrcnn_keypoints[i], boxes[i], image_shape, masks[i],
+                                                             keypoint_threshold=keypoint_threshold)
+
+            keypoints.append(keypoint)
+            full_masks.append(full_mask)
+
+        keypoints = np.stack(keypoints, axis=0) if keypoints else np.empty((0,) + (mrcnn_keypoints.shape[1], 3))
+        full_masks = np.stack(full_masks, axis=-1) \
+            if full_masks else np.empty((0,) + masks.shape[1:3])
+
+        return boxes, class_ids, scores, keypoints, full_masks
 
     def detect(self, images, verbose=0):
         """Runs the detection pipeline.
@@ -733,7 +836,7 @@ class MaskRCNN():
         # All images in a batch MUST be of the same size
         image_shape = molded_images[0].shape
         for g in molded_images[1:]:
-            assert g.shape == image_shape,\
+            assert g.shape == image_shape, \
                 "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
 
         # Anchors
@@ -747,12 +850,12 @@ class MaskRCNN():
             log("image_metas", image_metas)
             log("anchors", anchors)
         # Run object detection
-        detections, _, _, mrcnn_mask, _, _, _ =\
+        detections, _, _, mrcnn_mask, _, _, _ = \
             self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
         # Process detections
         results = []
         for i, image in enumerate(images):
-            final_rois, final_class_ids, final_scores, final_masks =\
+            final_rois, final_class_ids, final_scores, final_masks = \
                 self.unmold_detections(detections[i], mrcnn_mask[i],
                                        image.shape, molded_images[i].shape,
                                        windows[i])
@@ -761,6 +864,65 @@ class MaskRCNN():
                 "class_ids": final_class_ids,
                 "scores": final_scores,
                 "masks": final_masks,
+            })
+        return results
+
+    def detect_keypoint(self, images, verbose=0):
+        """Runs the detection pipeline.
+
+        images: List of images, potentially of different sizes.
+
+        Returns a list of dicts, one dict per image. The dict contains:
+        rois: [batch, N, (y1, x1, y2, x2)] detection bounding boxes
+        class_ids: [batch, N] int class IDs
+        scores: [batch, N] float probability scores for the class IDs
+        keypoints: [batch, N, num_keypoints, 3] (x, y, v), keypoint x, y coordinate and valid
+        """
+        assert self.mode == "inference", "Create model in inference mode."
+        assert len(
+            images) == self.config.BATCH_SIZE, "len(images) must be equal to BATCH_SIZE"
+
+        if verbose:
+            log("Processing {} images".format(len(images)))
+            for image in images:
+                log("image", image)
+        # Mold inputs to format expected by the neural network
+        molded_images, image_metas, windows = self.mold_inputs(images)
+        if verbose:
+            log("molded_images", molded_images)
+            log("image_metas", image_metas)
+            log("windows", windows)
+        # Run human pose detection
+        # [detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask, keypoint_mcrcnn_prob]
+        detections, mrcnn_class, mrcnn_bbox, \
+        rois, rpn_class, rpn_bbox, mrcnn_mask, mrcnn_keypoint_prob = \
+            self.keras_model.predict([molded_images, image_metas], verbose=0)
+        if verbose:
+            log("rpn_class", rpn_class)
+            log("rpn_bbox", rpn_bbox)
+
+            # 1000
+            log("rois", rois)
+            log("mrcnn_class", mrcnn_class)
+            log("mrcnn_bbox", mrcnn_bbox)
+
+            # 100
+            log("detections", detections)
+            log("mrcnn_mask", mrcnn_mask)
+            log("mrcnn_keypoint_prob", mrcnn_keypoint_prob)
+        # Process detections
+        results = []
+        for i, image in enumerate(images):
+            final_rois, final_class_ids, final_scores, final_keypoints, final_masks = \
+                self.unmold_keypoint_detections(detections[i], mrcnn_keypoint_prob[i],
+                                                image.shape, windows[i], mrcnn_mask[i],
+                                                keypoint_threshold=self.config.KEYPOINT_THRESHOLD)
+            results.append({
+                "rois": final_rois,
+                "class_ids": final_class_ids,
+                "scores": final_scores,
+                "keypoints": final_keypoints,
+                "masks": final_masks
             })
         return results
 
@@ -779,7 +941,7 @@ class MaskRCNN():
         masks: [H, W, N] instance binary masks
         """
         assert self.mode == "inference", "Create model in inference mode."
-        assert len(molded_images) == self.config.BATCH_SIZE,\
+        assert len(molded_images) == self.config.BATCH_SIZE, \
             "Number of images must be equal to BATCH_SIZE"
 
         if verbose:
@@ -804,13 +966,13 @@ class MaskRCNN():
             log("image_metas", image_metas)
             log("anchors", anchors)
         # Run object detection
-        detections, _, _, mrcnn_mask, _, _, _ =\
+        detections, _, _, mrcnn_mask, _, _, _ = \
             self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
         # Process detections
         results = []
         for i, image in enumerate(molded_images):
             window = [0, 0, image.shape[0], image.shape[1]]
-            final_rois, final_class_ids, final_scores, final_masks =\
+            final_rois, final_class_ids, final_scores, final_masks = \
                 self.unmold_detections(detections[i], mrcnn_mask[i],
                                        image.shape, molded_images[i].shape,
                                        window)
