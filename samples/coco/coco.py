@@ -102,6 +102,11 @@ class CocoConfig(Config):
     WEIGHT_LOSS = True
     KEYPOINT_THRESHOLD = 0.005
 
+    PART_STR = ["nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder",
+                "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist",
+                "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"]
+    LIMBS = [0, -1, -1, 5, -1, 6, 5, 7, 6, 8, 7, 9, 8, 10, 11, 13, 12, 14, 13, 15, 14, 16]
+
 
 ############################################################
 #  Dataset
