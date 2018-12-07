@@ -571,8 +571,8 @@ class MaskRCNN():
 
         # Data keypoint generators
 
-        train_generator = data_generator_keypoint(train_dataset, self.config, shuffle=True,
-                                                  batch_size=self.config.BATCH_SIZE, augment=True)
+        train_generator = data_generator_keypoint(train_dataset, self.config, shuffle=True, augment=True,
+                                                  augmentation=augmentation, batch_size=self.config.BATCH_SIZE)
         val_generator = data_generator_keypoint(val_dataset, self.config, shuffle=True,
                                                 batch_size=self.config.BATCH_SIZE,
                                                 augment=False)
