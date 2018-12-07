@@ -619,8 +619,8 @@ if __name__ == '__main__':
     # Load weights
     print("Loading weights ", model_path)
     if args.model.lower() == "coco":
-        model.load_weights(model_path, by_name=True, exclude = ["mrcnn_class_logits", "mrcnn_bbox_fc",
-                   "mrcnn_bbox", "mrcnn_mask"])
+        model.load_weights(model_path, by_name=True, exclude=["mrcnn_class_logits", "mrcnn_bbox_fc",
+                                                              "mrcnn_bbox", "mrcnn_mask"])
     else:
         model.load_weights(model_path, by_name=True)
 
