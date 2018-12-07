@@ -295,7 +295,7 @@ class CocoDataset(utils.Dataset):
             print("... done unzipping")
         print("Will use annotations in " + annFile)
 
-    def load_keypoints(self, image_id):
+    def load_mask_keypoints(self, image_id):
         """Load person keypoints for the given image.
 
         Returns:

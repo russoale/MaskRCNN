@@ -7,27 +7,25 @@ Licensed under the MIT License (see LICENSE for details)
 Written by Waleed Abdulla
 """
 
-import os
 import datetime
+import multiprocessing
+import os
 import re
 from collections import OrderedDict
-import multiprocessing
-import numpy as np
-import tensorflow as tf
+# Requires TensorFlow 1.3+ and Keras 2.0.8+.
+from distutils.version import LooseVersion
+
 import keras
 import keras.backend as K
 import keras.layers as KL
 import keras.models as KM
+import numpy as np
+import tensorflow as tf
 
 from mrcnn import utils
-
-# Requires TensorFlow 1.3+ and Keras 2.0.8+.
-from distutils.version import LooseVersion
-
 from mrcnn.data_formatting import compose_image_meta, parse_image_meta_graph, mold_image
-from mrcnn.data_generator import data_generator, data_generator_keypoint
+from mrcnn.data_generator import data_generator
 from mrcnn.detection_layer import DetectionLayer
-from mrcnn.detection_target_layer import DetectionTargetLayer
 from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph, build_fpn_keypoint_graph
 from mrcnn.keypoint_layer import DetectionKeypointTargetLayer
 from mrcnn.loss_functions import rpn_class_loss_graph, rpn_bbox_loss_graph, mrcnn_class_loss_graph, \
@@ -382,7 +380,6 @@ class MaskRCNN():
         # Update the log directory
         self.set_log_dir(filepath)
 
-
     def get_imagenet_weights(self):
         """Downloads ImageNet trained weights from Keras.
         Returns path to weights file.
@@ -571,11 +568,11 @@ class MaskRCNN():
 
         # Data keypoint generators
 
-        train_generator = data_generator_keypoint(train_dataset, self.config, shuffle=True, augment=True,
-                                                  augmentation=augmentation, batch_size=self.config.BATCH_SIZE)
-        val_generator = data_generator_keypoint(val_dataset, self.config, shuffle=True,
-                                                batch_size=self.config.BATCH_SIZE,
-                                                augment=False)
+        train_generator = data_generator(train_dataset, self.config, shuffle=True, augment=True,
+                                         augmentation=augmentation, batch_size=self.config.BATCH_SIZE)
+        val_generator = data_generator(val_dataset, self.config, shuffle=True,
+                                       batch_size=self.config.BATCH_SIZE,
+                                       augment=False)
 
         # # Data generators
         # train_generator = data_generator(train_dataset, self.config, shuffle=True,
