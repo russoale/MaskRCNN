@@ -21,6 +21,7 @@ import keras.layers as KL
 import keras.models as KM
 import numpy as np
 import tensorflow as tf
+from keras.engine.training_generator import fit_generator
 
 from mrcnn import utils
 from mrcnn.data_formatting import compose_image_meta, parse_image_meta_graph, mold_image
@@ -613,18 +614,18 @@ class MaskRCNN():
         else:
             workers = multiprocessing.cpu_count()
 
-        self.keras_model.fit_generator(
-            train_generator,
-            initial_epoch=self.epoch,
-            epochs=epochs,
-            steps_per_epoch=self.config.STEPS_PER_EPOCH,
-            callbacks=callbacks,
-            validation_data=val_generator,
-            validation_steps=self.config.VALIDATION_STEPS,
-            max_queue_size=100,
-            workers=workers,
-            use_multiprocessing=True,
-        )
+        fit_generator(self.keras_model,
+                      train_generator,
+                      steps_per_epoch=self.config.STEPS_PER_EPOCH,
+                      epochs=epochs,
+                      callbacks=callbacks,
+                      validation_data=val_generator,
+                      validation_steps=self.config.VALIDATION_STEPS,
+                      max_queue_size=100,
+                      workers=workers,
+                      use_multiprocessing=True,
+                      initial_epoch=self.epoch
+                      )
         self.epoch = max(self.epoch, epochs)
 
     def mold_inputs(self, images):
