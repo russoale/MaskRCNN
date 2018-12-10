@@ -634,23 +634,18 @@ class DataGenerator(KU.Sequence):
                     batch_mrcnn_mask[b] = mrcnn_mask
             b += 1
 
-            # Batch full?
-            if b >= self.batch_size:
-                inputs = [batch_images, batch_image_meta, batch_rpn_match, batch_rpn_bbox,
-                          batch_gt_class_ids, batch_gt_boxes, batch_gt_keypoints, batch_gt_masks]
-                outputs = []
-                # Not implemented for keypoint_mask and no need here.
-                if self.random_rois:
-                    inputs.extend([batch_rpn_rois])
-                    if self.detection_targets:
-                        inputs.extend([batch_rois])
-                        # Keras requires that output and targets have the same number of dimensions
-                        batch_mrcnn_class_ids = np.expand_dims(
-                            batch_mrcnn_class_ids, -1)
-                        outputs.extend(
-                            [batch_mrcnn_class_ids, batch_mrcnn_bbox, batch_mrcnn_mask])
+        inputs = [batch_images, batch_image_meta, batch_rpn_match, batch_rpn_bbox,
+                  batch_gt_class_ids, batch_gt_boxes, batch_gt_masks]
+        outputs = []
 
-                yield inputs, outputs
+        if self.random_rois:
+            inputs.extend([batch_rpn_rois])
+            if self.detection_targets:
+                inputs.extend([batch_rois])
+                # Keras requires that output and targets have the same number of dimensions
+                batch_mrcnn_class_ids = np.expand_dims(
+                    batch_mrcnn_class_ids, -1)
+                outputs.extend(
+                    [batch_mrcnn_class_ids, batch_mrcnn_bbox, batch_mrcnn_mask])
 
-                # start a new batch
-                b = 0
+        return inputs, outputs
