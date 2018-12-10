@@ -24,7 +24,7 @@ import tensorflow as tf
 
 from mrcnn import utils
 from mrcnn.data_formatting import compose_image_meta, parse_image_meta_graph, mold_image
-from mrcnn.data_generator import data_generator
+from mrcnn.data_generator import DataGenerator
 from mrcnn.detection_layer import DetectionLayer
 from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph, build_fpn_keypoint_graph
 from mrcnn.keypoint_layer import DetectionKeypointTargetLayer
@@ -568,11 +568,12 @@ class MaskRCNN():
 
         # Data keypoint generators
 
-        train_generator = data_generator(train_dataset, self.config, shuffle=True, augment=True,
-                                         augmentation=augmentation, batch_size=self.config.BATCH_SIZE)
-        val_generator = data_generator(val_dataset, self.config, shuffle=True,
-                                       batch_size=self.config.BATCH_SIZE,
-                                       augment=False)
+        train_generator = DataGenerator(train_dataset, self.config, shuffle=True,
+                                        augmentation=augmentation, batch_size=self.config.BATCH_SIZE,
+                                        augment=True)
+        val_generator = DataGenerator(val_dataset, self.config, shuffle=True,
+                                      batch_size=self.config.BATCH_SIZE,
+                                      augment=False)
 
         # # Data generators
         # train_generator = data_generator(train_dataset, self.config, shuffle=True,
