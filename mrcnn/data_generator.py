@@ -502,11 +502,12 @@ class DataGenerator(KU.Sequence):
         """
 
     def __init__(self, dataset, config, shuffle=True, augment=False, augmentation=None,
-                 random_rois=0, batch_size=1, detection_targets=False):
+                 random_rois=0, batch_size=1, detection_targets=False, no_augmentation_sources=None):
         self.image_ids = np.copy(dataset.image_ids)
         self.dataset = dataset
         self.config = config
         self.error_count = 0
+        self.no_augmentation_sources = no_augmentation_sources or []
         # Anchors
         # [anchor_count, (y1, x1, y2, x2)]
         self.backbone_shapes = compute_backbone_shapes(config, config.IMAGE_SHAPE)
