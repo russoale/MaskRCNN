@@ -4,6 +4,7 @@ import numpy as np
 from mrcnn import utils
 from mrcnn.data_formatting import compose_image_meta, mold_image
 from mrcnn.utility_functions import compute_backbone_shapes
+import imgaug as ia
 
 
 ############################################################
@@ -421,7 +422,10 @@ def load_image_gt(dataset, config, image_id, augmentation=None, use_mini_mask=Fa
         # Change mask to np.uint8 because imgaug doesn't support np.bool
         hooks = imgaug.HooksImages(activator=hook)
         mask = det.augment_image(mask.astype(np.uint8), hooks=hooks)
-        keypoints = det.augment_keypoints(keypoints, hooks=hooks)
+
+        ia_keypoints = [ia.Keypoint(kp[0], kp[1]) for kp in keypoints]
+        ia_keypoints = ia.KeypointsOnImage(ia_keypoints, shape=image_shape)
+        keypoints = det.augment_keypoints(ia_keypoints, hooks=hooks)
         # Verify that shapes didn't change
         assert image.shape == image_shape, "Augmentation shouldn't change image size"
         assert mask.shape == mask_shape, "Augmentation shouldn't change mask size"
@@ -508,20 +512,18 @@ class DataGenerator(KU.Sequence):
         self.config = config
         self.error_count = 0
         self.no_augmentation_sources = no_augmentation_sources or []
-        # Anchors
-        # [anchor_count, (y1, x1, y2, x2)]
-        self.backbone_shapes = compute_backbone_shapes(config, config.IMAGE_SHAPE)
-        self.anchors = utils.generate_pyramid_anchors(config.RPN_ANCHOR_SCALES,
-                                                      config.RPN_ANCHOR_RATIOS,
-                                                      self.backbone_shapes,
-                                                      config.BACKBONE_STRIDES,
-                                                      config.RPN_ANCHOR_STRIDE)
         self.shuffle = shuffle
         self.augment = augment
         self.augmentation = augmentation
         self.random_rois = random_rois
         self.batch_size = batch_size
         self.detection_targets = detection_targets
+        self.backbone_shapes = compute_backbone_shapes(config, config.IMAGE_SHAPE)
+        self.anchors = utils.generate_pyramid_anchors(config.RPN_ANCHOR_SCALES,
+                                                      config.RPN_ANCHOR_RATIOS,
+                                                      self.backbone_shapes,
+                                                      config.BACKBONE_STRIDES,
+                                                      config.RPN_ANCHOR_STRIDE)
 
     def __len__(self):
         return int(np.ceil(len(self.image_ids) / float(self.batch_size)))

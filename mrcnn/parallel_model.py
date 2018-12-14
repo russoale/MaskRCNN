@@ -18,10 +18,14 @@ import keras.backend as K
 import keras.layers as KL
 import keras.models as KM
 
-
 def make_parallel(keras_model, gpu_count):
     """Creates a new wrapper model that consists of multiple replicas of
     the original model placed on different GPUs.
+    Args:
+        keras_model: the input model to replicate on multiple gpus
+        gpu_count: the number of replicas to build
+    Returns:
+        Multi-gpu model
     """
     # Slice inputs. Slice inputs on the CPU to avoid sending a copy
     # of the full inputs to all GPUs. Saves on bandwidth and memory.
@@ -104,7 +108,6 @@ class ParallelModel(KM.Model):
         super(ParallelModel, self).summary(*args, **kwargs)
         self.inner_model.summary(*args, **kwargs)
 
-
 if __name__ == "__main__":
     # Testing code below. It creates a simple model to train on MNIST and
     # tries to run it on 2 GPUs. It saves the graph so it can be viewed
@@ -121,7 +124,7 @@ if __name__ == "__main__":
     GPU_COUNT = 2
 
     # Root directory of the project
-    ROOT_DIR = os.path.abspath("../")
+    ROOT_DIR = os.path.abspath(".")
 
     # Directory to save logs and trained model
     MODEL_DIR = os.path.join(ROOT_DIR, "logs")
