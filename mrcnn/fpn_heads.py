@@ -119,7 +119,7 @@ def build_fpn_mask_graph(rois, feature_maps, image_meta,
 
 
 def build_fpn_keypoint_graph(rois, feature_maps, image_meta,
-                             pool_size, num_keypoints):
+                             pool_size, num_keypoints, train_bn=True):
     """Builds the computation graph of the keypoint head of Feature Pyramid Network.
 
     rois: [batch, num_rois, (y1, x1, y2, x2)] Proposal boxes in normalized
@@ -142,8 +142,8 @@ def build_fpn_keypoint_graph(rois, feature_maps, image_meta,
         x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                                name="mrcnn_keypoint_mask_conv{}".format(i + 1))(x)
 
-        x = KL.TimeDistributed(BatchNorm(axis=3),
-                               name='mrcnn_keypoint_mask_bn{}'.format(i + 1))(x)
+        x = KL.TimeDistributed(BatchNorm(),
+                               name='mrcnn_keypoint_mask_bn{}'.format(i + 1))(x, training=train_bn)
         x = KL.Activation('relu')(x)
 
     x = KL.TimeDistributed(KL.Conv2DTranspose(num_keypoints, (2, 2), strides=2),

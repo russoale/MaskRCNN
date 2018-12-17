@@ -280,8 +280,8 @@ def test_keypoint_mrcnn_mask_loss_graph(target_keypoints, target_keypoint_weight
     return loss
 
 
-def keypoint_mrcnn_mask_loss_graph(target_keypoints, target_keypoint_weights, target_class_ids, pred_keypoints_logit,
-                                   weight_loss=True, mask_shape=[56, 56], number_point=17):
+def mrcnn_keypoint_loss_graph(target_keypoints, target_keypoint_weights, target_class_ids, pred_keypoints_logit,
+                              weight_loss=True, mask_shape=[56, 56], number_point=17):
     """Mask softmax cross-entropy loss for the keypoint head.
 
     target_keypoints: [batch, num_rois, num_keypoints].

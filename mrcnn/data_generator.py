@@ -423,9 +423,11 @@ def load_image_gt(dataset, config, image_id, augmentation=None, use_mini_mask=Fa
         hooks = imgaug.HooksImages(activator=hook)
         mask = det.augment_image(mask.astype(np.uint8), hooks=hooks)
 
-        ia_keypoints = [ia.Keypoint(kp[0], kp[1]) for kp in keypoints]
-        ia_keypoints = ia.KeypointsOnImage(ia_keypoints, shape=image_shape)
-        keypoints = det.augment_keypoints(ia_keypoints, hooks=hooks)
+        ia_keypoints = utils.create_keypoints(keypoints)
+        if ia_keypoints:
+            ia_keypoints = ia.KeypointsOnImage(ia_keypoints, shape=image_shape)
+            ia_keypoints = det.augment_keypoints([ia_keypoints], hooks=hooks)[0]
+            keypoints = utils.convert_back(ia_keypoints, keypoints)
         # Verify that shapes didn't change
         assert image.shape == image_shape, "Augmentation shouldn't change image size"
         assert mask.shape == mask_shape, "Augmentation shouldn't change mask size"

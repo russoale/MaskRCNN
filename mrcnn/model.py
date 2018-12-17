@@ -30,7 +30,7 @@ from mrcnn.detection_layer import DetectionLayer
 from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph, build_fpn_keypoint_graph
 from mrcnn.keypoint_layer import DetectionKeypointTargetLayer
 from mrcnn.loss_functions import rpn_class_loss_graph, rpn_bbox_loss_graph, mrcnn_class_loss_graph, \
-    mrcnn_bbox_loss_graph, mrcnn_mask_loss_graph, keypoint_mrcnn_mask_loss_graph
+    mrcnn_bbox_loss_graph, mrcnn_mask_loss_graph, mrcnn_keypoint_loss_graph
 from mrcnn.misc_functions import norm_boxes_graph
 from mrcnn.proposal_layer import ProposalLayer
 from mrcnn.resnet import resnet_graph
@@ -104,8 +104,10 @@ class MaskRCNN():
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
 
             keypoint_scale = K.cast(K.stack([w, h, 1], axis=0), tf.float32)
-            input_gt_keypoints = KL.Input(shape=[None, config.NUM_KEYPOINTS, 3])
-            gt_keypoints = KL.Lambda(lambda x: x / keypoint_scale, name="gt_keypoints")(input_gt_keypoints)
+            input_gt_keypoints = KL.Input(
+                shape=[None, config.NUM_KEYPOINTS, 3], name="input_gt_keypoints")
+            gt_keypoints = KL.Lambda(lambda x: x / keypoint_scale)(input_gt_keypoints)
+
             # 3. GT Masks (zero padded)
             # [batch, height, width, MAX_GT_INSTANCES]
             if config.USE_MINI_MASK:
@@ -236,9 +238,10 @@ class MaskRCNN():
                                               config.NUM_CLASSES,
                                               train_bn=config.TRAIN_BN)
 
-            keypoint_mrcnn_mask = build_fpn_keypoint_graph(rois, mrcnn_feature_maps, input_image_meta,
-                                                           config.KEYPOINT_MASK_POOL_SIZE,
-                                                           config.NUM_KEYPOINTS)
+            mrcnn_keypoint = build_fpn_keypoint_graph(rois, mrcnn_feature_maps, input_image_meta,
+                                                      config.KEYPOINT_MASK_POOL_SIZE,
+                                                      config.NUM_KEYPOINTS,
+                                                      train_bn=config.TRAIN_BN)
 
             # TODO: clean up (use tf.identify if necessary)
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
@@ -254,9 +257,9 @@ class MaskRCNN():
                 [target_bbox, target_class_ids, mrcnn_bbox])
             mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
                 [target_mask, target_class_ids, mrcnn_mask])
-            keypoint_loss = KL.Lambda(lambda x: keypoint_mrcnn_mask_loss_graph(*x, weight_loss=config.WEIGHT_LOSS),
-                                      name="keypoint_mrcnn_mask_loss")(
-                [target_keypoint, target_keypoint_weight, target_class_ids, keypoint_mrcnn_mask])
+            keypoint_loss = KL.Lambda(lambda x: mrcnn_keypoint_loss_graph(*x, weight_loss=config.WEIGHT_LOSS),
+                                      name="mrcnn_keypoint_loss")(
+                [target_keypoint, target_keypoint_weight, target_class_ids, mrcnn_keypoint])
 
             # Model
             inputs = [input_image, input_image_meta,
@@ -265,7 +268,7 @@ class MaskRCNN():
             if not config.USE_RPN_ROIS:
                 inputs.append(input_rois)
             outputs = [rpn_class_logits, rpn_class, rpn_bbox,
-                       mrcnn_class_logits, mrcnn_class, mrcnn_bbox, keypoint_mrcnn_mask,
+                       mrcnn_class_logits, mrcnn_class, mrcnn_bbox, mrcnn_keypoint,
                        rpn_rois, output_rois,
                        rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, keypoint_loss, mask_loss]
             model = KM.Model(inputs, outputs, name='mask_keypoint_mrcnn')
@@ -293,7 +296,8 @@ class MaskRCNN():
                                               train_bn=config.TRAIN_BN)
             keypoint_mrcnn = build_fpn_keypoint_graph(detection_boxes, mrcnn_feature_maps, input_image_meta,
                                                       config.KEYPOINT_MASK_POOL_SIZE,
-                                                      config.NUM_KEYPOINTS)
+                                                      config.NUM_KEYPOINTS,
+                                                      train_bn=config.TRAIN_BN)
 
             keypoint_mcrcnn_prob = KL.Activation("softmax", name="mrcnn_prob")(keypoint_mrcnn)
             model = KM.Model([input_image, input_image_meta],
@@ -364,12 +368,13 @@ class MaskRCNN():
         # In multi-GPU training, we wrap the model. Get layers
         # of the inner model because they have the weights.
         keras_model = self.keras_model
-        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model") \
-            else keras_model.layers
+        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model") else keras_model.layers
 
         # Exclude some layers
         if exclude:
             layers = filter(lambda l: l.name not in exclude, layers)
+
+        log("Loading weights from: {}".format(filepath))
 
         if by_name:
             saving.load_weights_from_hdf5_group_by_name(f, layers)
@@ -408,7 +413,7 @@ class MaskRCNN():
         self.keras_model._losses = []
         self.keras_model._per_input_losses = {}
         loss_names = ["rpn_class_loss", "rpn_bbox_loss",
-                      "mrcnn_class_loss", "mrcnn_bbox_loss", "keypoint_mrcnn_mask_loss", "mrcnn_mask_loss"]
+                      "mrcnn_class_loss", "mrcnn_bbox_loss", "mrcnn_keypoint_loss", "mrcnn_mask_loss"]
         for name in loss_names:
             layer = self.keras_model.get_layer(name)
             if layer.output in self.keras_model.losses:
