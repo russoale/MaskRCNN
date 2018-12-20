@@ -238,8 +238,7 @@ class MaskRCNN():
                                               train_bn=config.TRAIN_BN)
 
             keypoint_mrcnn_mask = build_fpn_keypoint_graph(rois, mrcnn_feature_maps, input_image_meta,
-                                                           config.KEYPOINT_MASK_POOL_SIZE,
-                                                           config.NUM_KEYPOINTS)
+                                                           config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS, train_bn=config.TRAIN_BN)
 
             # TODO: clean up (use tf.identify if necessary)
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
@@ -293,8 +292,7 @@ class MaskRCNN():
                                               config.NUM_CLASSES,
                                               train_bn=config.TRAIN_BN)
             keypoint_mrcnn = build_fpn_keypoint_graph(detection_boxes, mrcnn_feature_maps, input_image_meta,
-                                                      config.KEYPOINT_MASK_POOL_SIZE,
-                                                      config.NUM_KEYPOINTS)
+                                                      config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS, train_bn=config.TRAIN_BN)
 
             keypoint_mcrcnn_prob = KL.Activation("softmax", name="mrcnn_prob")(keypoint_mrcnn)
             model = KM.Model([input_image, input_image_meta],
