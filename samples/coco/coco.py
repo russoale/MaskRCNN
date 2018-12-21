@@ -88,7 +88,7 @@ class CocoConfig(Config):
     IMAGES_PER_GPU = 2
 
     # Uncomment to train on 8 GPUs (default is 1)
-    GPU_COUNT = 2
+    GPU_COUNT = 4
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 1  # Person and background
@@ -672,7 +672,7 @@ if __name__ == '__main__':
         # Finetune layers from ResNet stage 4 and up
         print("Fine tune Resnet stage 4 and up")
         model.train(dataset_train, dataset_val,
-                    learning_rate=config.LEARNING_RATE / 100,
+                    learning_rate=config.LEARNING_RATE,
                     epochs=120,
                     layers='4+',
                     augmentation=augmentation)
@@ -681,7 +681,7 @@ if __name__ == '__main__':
         # Fine tune all layers
         print("Fine tune all layers")
         model.train(dataset_train, dataset_val,
-                    learning_rate=config.LEARNING_RATE / 100,
+                    learning_rate=config.LEARNING_RATE / 10,
                     epochs=160,
                     layers='all',
                     augmentation=augmentation)
