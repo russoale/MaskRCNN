@@ -80,6 +80,39 @@ def keypoint_to_mask(keypoints, height, width):
     return keypoint_mask, keypoint_weight
 
 
+def create_keypoints(keypoint):
+    import imgaug as ia
+
+    ia_keypoint = []
+    keypoint_shape = np.shape(keypoint)
+    num_person = keypoint_shape[0]
+    num_keypoint = keypoint_shape[1]
+    for i in range(num_person):
+        for j in range(num_keypoint):
+            if keypoint[i, j, 2] != 0:
+                ia_keypoint.append(ia.Keypoint(x=keypoint[i, j, 0], y=keypoint[i, j, 1]))
+            else:
+                # Maintain COCO convention that if visibility == 0, then x, y = 0
+                ia_keypoint.append(ia.Keypoint(x=0, y=0))
+
+    return ia_keypoint
+
+
+# keep initial keypoint shape for proper loss calculation
+def convert_back(ia_keypoints, init_keypoints):
+    keypoints = np.zeros(init_keypoints.shape, np.int8)
+    num_person = init_keypoints.shape[0]
+    num_keypoint = init_keypoints.shape[1]
+    for i in range(num_person):
+        for j in range(num_keypoint):
+            index = (i + 1) * (j + 1) - 1
+            kp = ia_keypoints.keypoints[index]
+            keypoints[i, j, 0] = kp.x
+            keypoints[i, j, 1] = kp.y
+            keypoints[i, j, 2] = init_keypoints[i, j, 2]
+
+    return keypoints
+
 ############################################################
 #  Bounding Boxes
 ############################################################

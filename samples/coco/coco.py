@@ -629,20 +629,30 @@ if __name__ == '__main__':
             task_type = "person_keypoints"
         else:
             task_type = "instances"
-
         # Training dataset. Use the training set and 35K from the
         # validation set, as as in the Mask RCNN paper.
         dataset_train = CocoDataset(task_type=task_type)
-        dataset_train.load_coco(args.dataset, "train", year=args.year, auto_download=args.download)
+        dataset_train.load_coco(args.dataset, "train", year=args.year, class_ids=[1], auto_download=args.download)
         if args.year in '2014':
-            dataset_train.load_coco(args.dataset, "valminusminival", year=args.year, auto_download=args.download)
+            dataset_train.load_coco(args.dataset, "valminusminival", year=args.year, class_ids=[1],
+                                    auto_download=args.download)
         dataset_train.prepare()
 
         # Validation dataset
         dataset_val = CocoDataset(task_type=task_type)
         val_type = "val" if args.year in '2017' else "minival"
-        dataset_val.load_coco(args.dataset, val_type, year=args.year, auto_download=args.download)
+        dataset_val.load_coco(args.dataset, val_type, year=args.year, class_ids=[1], auto_download=args.download)
         dataset_val.prepare()
+
+        print("Train Keypoints Image Count: {}".format(len(dataset_train.image_ids)))
+        print("Train Keypoints Class Count: {}".format(dataset_train.num_classes))
+        for i, info in enumerate(dataset_train.class_info):
+            print("{:3}. {:50}".format(i, info['name']))
+
+        print("Val Keypoints Image Count: {}".format(len(dataset_val.image_ids)))
+        print("Val Keypoints Class Count: {}".format(dataset_val.num_classes))
+        for i, info in enumerate(dataset_val.class_info):
+            print("{:3}. {:50}".format(i, info['name']))
 
         # Image Augmentation
         # Right/Left flip 50% of the time

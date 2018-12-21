@@ -7,27 +7,25 @@ Licensed under the MIT License (see LICENSE for details)
 Written by Waleed Abdulla
 """
 
-import os
 import datetime
-import re
-from collections import OrderedDict
 import multiprocessing
-import numpy as np
-import tensorflow as tf
+from collections import OrderedDict
+# Requires TensorFlow 1.3+ and Keras 2.0.8+.
+from distutils.version import LooseVersion
+
 import keras
 import keras.backend as K
 import keras.layers as KL
 import keras.models as KM
+import numpy as np
+import os
+import re
+import tensorflow as tf
 
 from mrcnn import utils
-
-# Requires TensorFlow 1.3+ and Keras 2.0.8+.
-from distutils.version import LooseVersion
-
 from mrcnn.data_formatting import compose_image_meta, parse_image_meta_graph, mold_image
-from mrcnn.data_generator import data_generator, data_generator_keypoint
+from mrcnn.data_generator import data_generator
 from mrcnn.detection_layer import DetectionLayer
-from mrcnn.detection_target_layer import DetectionTargetLayer
 from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph, build_fpn_keypoint_graph
 from mrcnn.keypoint_layer import DetectionKeypointTargetLayer
 from mrcnn.loss_functions import rpn_class_loss_graph, rpn_bbox_loss_graph, mrcnn_class_loss_graph, \
@@ -238,7 +236,8 @@ class MaskRCNN():
                                               train_bn=config.TRAIN_BN)
 
             keypoint_mrcnn_mask = build_fpn_keypoint_graph(rois, mrcnn_feature_maps, input_image_meta,
-                                                           config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS, train_bn=config.TRAIN_BN)
+                                                           config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS,
+                                                           train_bn=config.TRAIN_BN)
 
             # TODO: clean up (use tf.identify if necessary)
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
@@ -292,7 +291,8 @@ class MaskRCNN():
                                               config.NUM_CLASSES,
                                               train_bn=config.TRAIN_BN)
             keypoint_mrcnn = build_fpn_keypoint_graph(detection_boxes, mrcnn_feature_maps, input_image_meta,
-                                                      config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS, train_bn=config.TRAIN_BN)
+                                                      config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS,
+                                                      train_bn=config.TRAIN_BN)
 
             keypoint_mcrcnn_prob = KL.Activation("softmax", name="mrcnn_prob")(keypoint_mrcnn)
             model = KM.Model([input_image, input_image_meta],
@@ -379,7 +379,6 @@ class MaskRCNN():
 
         # Update the log directory
         self.set_log_dir(filepath)
-
 
     def get_imagenet_weights(self):
         """Downloads ImageNet trained weights from Keras.
@@ -569,11 +568,13 @@ class MaskRCNN():
 
         # Data keypoint generators
 
-        train_generator = data_generator_keypoint(train_dataset, self.config, shuffle=True,
-                                                  batch_size=self.config.BATCH_SIZE, augment=True)
-        val_generator = data_generator_keypoint(val_dataset, self.config, shuffle=True,
-                                                batch_size=self.config.BATCH_SIZE,
-                                                augment=False)
+        train_generator = data_generator(train_dataset,
+                                         self.config,
+                                         shuffle=True,
+                                         augmentation=augmentation,
+                                         batch_size=self.config.BATCH_SIZE,
+                                         no_augmentation_sources=no_augmentation_sources)
+        val_generator = data_generator(val_dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE)
 
         # # Data generators
         # train_generator = data_generator(train_dataset, self.config, shuffle=True,
