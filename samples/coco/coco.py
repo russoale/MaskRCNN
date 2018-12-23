@@ -59,7 +59,7 @@ from mrcnn.config import Config
 from mrcnn import model as modellib, utils
 
 # Local path to trained weights file
-COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_rcnn_coco.h5")
+COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_rcnn_coco_0160.h5")
 
 # path to MSCOCO dataset
 COCO_DIR = os.path.join(DATA_DIR, "Datasets", "MSCOCO_2017")  # TODO: enter value here
@@ -113,9 +113,9 @@ class CocoConfig(Config):
 
     KEYPOINT_MASK_POOL_SIZE = 7
 
-    LEARNING_RATE = 0.002
+    LEARNING_RATE = 0.001
 
-    STEPS_PER_EPOCH = 1000
+    STEPS_PER_EPOCH = 4000
 
     WEIGHT_LOSS = True
 
@@ -205,7 +205,7 @@ class CocoDataset(utils.Dataset):
                 annotations=coco.loadAnns(coco.getAnnIds(
                     imgIds=[i], catIds=class_ids, iscrowd=None)))
 
-        if (self.task_type == "person_keypoints"):
+        if self.task_type == "person_keypoints":
             # the connection between 2 close keypoints
             self._skeleton = coco.loadCats(1)[0]["skeleton"]
             # keypoint names
@@ -571,6 +571,11 @@ if __name__ == '__main__':
                         metavar="<True|False>",
                         help='Include Keypoint Detection (default=True)',
                         type=bool)
+    parser.add_argument('--continue_training', required=False,
+                        default=False,
+                        metavar="<True|False>",
+                        help="Try to continue a previously started training, \
+                                mainly by trying to recreate the optimizer state and epoch number.")
 
     args = parser.parse_args()
     print("Command: ", args.command)
@@ -579,6 +584,8 @@ if __name__ == '__main__':
     print("Year: ", args.year)
     print("Logs: ", args.logs)
     print("Auto Download: ", args.download)
+    print("Keypoint: ", args.keypoint)
+    print("Continue Training: ", args.continue_training)
 
     # Configurations
     if args.command == "train":
@@ -593,6 +600,7 @@ if __name__ == '__main__':
 
 
         config = InferenceConfig()
+
     config.display()
 
     # Create model
@@ -615,13 +623,13 @@ if __name__ == '__main__':
     else:
         model_path = args.model
 
-    # Load weights
-    print("Loading weights ", model_path)
-    if args.model.lower() == "coco":
-        model.load_weights(model_path, by_name=True, exclude = ["mrcnn_class_logits", "mrcnn_bbox_fc",
-                   "mrcnn_bbox", "mrcnn_mask"])
-    else:
-        model.load_weights(model_path, by_name=True)
+    # # Load weights
+    # print("Loading weights ", model_path)
+    # if args.model.lower() == "coco":
+    #     model.load_weights(model_path, by_name=True, exclude = ["mrcnn_class_logits", "mrcnn_bbox_fc",
+    #                "mrcnn_bbox", "mrcnn_mask"])
+    # else:
+    #     model.load_weights(model_path, by_name=True)
 
     # Train or evaluate
     if args.command == "train":
@@ -658,33 +666,79 @@ if __name__ == '__main__':
         # Right/Left flip 50% of the time
         augmentation = imgaug.augmenters.Fliplr(0.5)
 
-        # *** This training schedule is an example. Update to your needs ***
+        # *** training phase schedule ***
+        lr_values = [config.LEARNING_RATE,
+                     config.LEARNING_RATE,
+                     config.LEARNING_RATE / 10]
+        epochs_values = [10,
+                         120,
+                         160]
+        trainable_layers = ["heads",
+                            "all",
+                            "all"]
 
-        # Training - Stage 1
-        print("Training network heads")
-        model.train(dataset_train, dataset_val,
-                    learning_rate=config.LEARNING_RATE,
-                    epochs=40,
-                    layers='heads',
-                    augmentation=augmentation)
+        last_layers = None
+        last_epoch = None
+        if model_path is not None and args.continue_training:
+            last_epoch, _ = model.get_epoch_and_date_from_model_path(model_path=model_path)
+        weights_loaded = False
+        can_load_optimizer_weights = args.continue_training
 
-        # Training - Stage 2
-        # Finetune layers from ResNet stage 4 and up
-        print("Fine tune Resnet stage 4 and up")
-        model.train(dataset_train, dataset_val,
-                    learning_rate=config.LEARNING_RATE / 100,
-                    epochs=120,
-                    layers='4+',
-                    augmentation=augmentation)
+        # # Training - Stage 1
+        # print("Training network heads")
+        # model.train(dataset_train, dataset_val,
+        #             learning_rate=config.LEARNING_RATE,
+        #             epochs=40,
+        #             layers='heads',
+        #             augmentation=augmentation)
+        #
+        # # Training - Stage 2
+        # # Finetune layers from ResNet stage 4 and up
+        # print("Fine tune Resnet stage 4 and up")
+        # model.train(dataset_train, dataset_val,
+        #             learning_rate=config.LEARNING_RATE / 100,
+        #             epochs=120,
+        #             layers='4+',
+        #             augmentation=augmentation)
+        #
+        # # Training - Stage 3
+        # # Fine tune all layers
+        # print("Fine tune all layers")
+        # model.train(dataset_train, dataset_val,
+        #             learning_rate=config.LEARNING_RATE / 100,
+        #             epochs=160,
+        #             layers='all',
+        #             augmentation=augmentation)
 
-        # Training - Stage 3
-        # Fine tune all layers
-        print("Fine tune all layers")
-        model.train(dataset_train, dataset_val,
-                    learning_rate=config.LEARNING_RATE / 100,
-                    epochs=160,
-                    layers='all',
-                    augmentation=augmentation)
+        # Run all training phases
+        for i_t, (lr, epochs, layers) in enumerate(zip(lr_values, epochs_values, trainable_layers)):
+            if last_epoch is not None and last_epoch >= epochs:
+                # If we start with a new training phase, optimizer state can only be reused,
+                # if the trainable layers did not change.
+                if last_epoch == epochs:
+                    if len(trainable_layers) > (i_t + 1) and layers != trainable_layers[i_t + 1]:
+                        can_load_optimizer_weights = False
+                # Skip this training stage as it has already been completed
+                continue
+
+            # If the trainable layers changed, we need to recompile the model
+            if layers != last_layers:
+                model.compile(layers=layers)
+
+            # For the first training phase to run, load the initial weights
+            if not weights_loaded and model_path is not None:
+                # Load weights
+                print("Loading weights from: ", model_path)
+                model.load_weights(model_path, by_name=True,
+                                   exclude=["mrcnn_class_logits", "mrcnn_bbox_fc", "mrcnn_bbox", "mrcnn_mask"],
+                                   include_optimizer=can_load_optimizer_weights)
+                weights_loaded = True
+
+            print("Training: {}".format(layers))
+            model.train(dataset_train, dataset_val, learning_rate=lr, epochs=epochs, augmentation=augmentation)
+
+            last_layers = layers
+
 
     elif args.command == "evaluate":
         # Validation dataset
