@@ -20,11 +20,11 @@ import numpy as np
 import os
 import re
 import tensorflow as tf
-from keras.engine.training_generator import fit_generator, evaluate_generator
+from keras.engine.training_generator import fit_generator
 
 from mrcnn import utils
 from mrcnn.data_formatting import compose_image_meta, parse_image_meta_graph, mold_image
-from mrcnn.data_generator import DataGenerator, data_generator
+from mrcnn.data_generator import DataGenerator
 from mrcnn.detection_layer import DetectionLayer
 from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph, build_fpn_keypoint_graph
 from mrcnn.keypoint_layer import DetectionKeypointTargetLayer
@@ -574,13 +574,14 @@ class MaskRCNN():
         assert self.mode == "training", "Create model in training mode."
 
         # Data keypoint generators
-        train_generator = data_generator(train_dataset,
-                                         self.config,
-                                         shuffle=True,
-                                         augmentation=augmentation,
-                                         batch_size=self.config.BATCH_SIZE,
-                                         no_augmentation_sources=no_augmentation_sources)
-        val_generator = data_generator(val_dataset, self.config, shuffle=True, batch_size=self.config.BATCH_SIZE)
+        train_generator = DataGenerator(train_dataset,
+                                        self.config,
+                                        shuffle=True,
+                                        augmentation=augmentation,
+                                        batch_size=self.config.BATCH_SIZE,
+                                        no_augmentation_sources=no_augmentation_sources)
+        val_generator = DataGenerator(val_dataset, self.config, shuffle=True,
+                                      batch_size=self.config.BATCH_SIZE)
 
         # Create log_dir if it does not exist
         if not os.path.exists(self.log_dir):
@@ -621,7 +622,7 @@ class MaskRCNN():
             epochs=epochs,
             steps_per_epoch=self.config.STEPS_PER_EPOCH,
             callbacks=callbacks,
-            validation_data=next(val_generator),
+            validation_data=val_generator,
             validation_steps=self.config.VALIDATION_STEPS,
             max_queue_size=100,
             workers=workers,

@@ -1,6 +1,6 @@
+import keras.layers as KL
 import tensorflow as tf
 from keras import backend as K
-import keras.layers as KL
 
 from mrcnn.misc_functions import batch_pack_graph
 
@@ -336,6 +336,4 @@ def keypoint_mrcnn_mask_loss_graph(target_keypoints, target_keypoint_weights, ta
                         )
     else:
         loss = K.mean(loss)
-    loss = tf.reshape(loss, [1, 1])
-
     return loss
