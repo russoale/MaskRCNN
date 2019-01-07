@@ -30,7 +30,7 @@ from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph, build_fp
 from mrcnn.keypoint_layer import DetectionKeypointTargetLayer
 from mrcnn.load_weights import load_all_weights, ModelCheckpointWithOptimizer
 from mrcnn.loss_functions import rpn_class_loss_graph, rpn_bbox_loss_graph, mrcnn_class_loss_graph, \
-    mrcnn_bbox_loss_graph, mrcnn_mask_loss_graph, keypoint_mrcnn_mask_loss_graph
+    mrcnn_bbox_loss_graph, mrcnn_mask_loss_graph, mrcnn_keypoint_loss_graph
 from mrcnn.misc_functions import norm_boxes_graph
 from mrcnn.proposal_layer import ProposalLayer
 from mrcnn.resnet import resnet_graph
@@ -255,8 +255,10 @@ class MaskRCNN():
                 [target_bbox, target_class_ids, mrcnn_bbox])
             mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
                 [target_mask, target_class_ids, mrcnn_mask])
-            keypoint_loss = KL.Lambda(lambda x: keypoint_mrcnn_mask_loss_graph(*x, weight_loss=config.WEIGHT_LOSS),
-                                      name="keypoint_mrcnn_mask_loss")(
+            keypoint_loss = KL.Lambda(lambda x: mrcnn_keypoint_loss_graph(*x, weight_loss=config.KEYPOINT_LOSS_WEIGHTING,
+                                                                          mask_shape=config.KEYPOINT_MASK_SHAPE,
+                                                                          number_point=config.NUM_KEYPOINTS),
+                                      name="mrcnn_keypoint_loss")(
                 [target_keypoint, target_keypoint_weight, target_class_ids, keypoint_mrcnn_mask])
 
             # Model
@@ -300,7 +302,7 @@ class MaskRCNN():
             model = KM.Model([input_image, input_image_meta],
                              [detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask,
                               keypoint_mcrcnn_prob],
-                             name='keypoint_mask_rcnn')
+                             name='mask_keypoint_mrcnn')
 
         # Add multi-GPU support.
         if config.GPU_COUNT > 1:
@@ -426,7 +428,7 @@ class MaskRCNN():
         self.keras_model._losses = []
         self.keras_model._per_input_losses = {}
         loss_names = ["rpn_class_loss", "rpn_bbox_loss",
-                      "mrcnn_class_loss", "mrcnn_bbox_loss", "keypoint_mrcnn_mask_loss", "mrcnn_mask_loss"]
+                      "mrcnn_class_loss", "mrcnn_bbox_loss", "mrcnn_keypoint_loss", "mrcnn_mask_loss"]
         for name in loss_names:
             layer = self.keras_model.get_layer(name)
             if layer.output in self.keras_model.losses:

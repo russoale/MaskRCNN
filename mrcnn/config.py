@@ -194,8 +194,13 @@ class Config(object):
         "rpn_bbox_loss": 1.,
         "mrcnn_class_loss": 1.,
         "mrcnn_bbox_loss": 1.,
-        "mrcnn_mask_loss": 1.
+        "mrcnn_mask_loss": 1.,
+        "mrcnn_keypoint_loss": 1.,
     }
+
+    # If True, normalize the keypoint loss by the number of "active" (present) keypoints
+    # Otherwise, always normalize by NUM_KEYPOINTS
+    KEYPOINT_LOSS_WEIGHTING = True
 
     # Use RPN ROIs or externally generated ROIs for training
     # Keep this True for most situations. Set to False if you want to train

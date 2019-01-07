@@ -117,7 +117,7 @@ class CocoConfig(Config):
 
     STEPS_PER_EPOCH = 4000
 
-    WEIGHT_LOSS = True
+    KEYPOINT_LOSS_WEIGHTING = True
 
     KEYPOINT_THRESHOLD = 0.005
 
