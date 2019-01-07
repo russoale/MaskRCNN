@@ -156,13 +156,13 @@ def detection_keypoint_targets_graph(proposals, gt_class_ids, gt_boxes, gt_keypo
         x_real_map = tf.cast(x_real * scale_x+0.5, tf.int32)
         y_real_map= tf.cast(y_real*scale_y+0.5,tf.int32)
         x_boundary_bool = tf.cast((x_real_map == config.KEYPOINT_MASK_SHAPE[1]), tf.int32)
-        y_boundary_bool = tf.cast((y_real_map == config.KEYPOINT_MASK_SHAPE[1]), tf.int32)
+        y_boundary_bool = tf.cast((y_real_map == config.KEYPOINT_MASK_SHAPE[0]), tf.int32)
         y_real_map = y_real_map * (1 - y_boundary_bool) + y_boundary_bool * (config.KEYPOINT_MASK_SHAPE[0] - 1)
         x_real_map = x_real_map * (1 - x_boundary_bool) + x_boundary_bool * (config.KEYPOINT_MASK_SHAPE[1] - 1)
 
         valid_loc = tf.logical_and(
-            tf.logical_and(x_real_map > 0, x_real_map < config.KEYPOINT_MASK_SHAPE[0]),
-            tf.logical_and(y_real_map > 0, y_real_map < config.KEYPOINT_MASK_SHAPE[1])
+            tf.logical_and(x_real_map >= 0, x_real_map < config.KEYPOINT_MASK_SHAPE[0]),
+            tf.logical_and(y_real_map >= 0, y_real_map < config.KEYPOINT_MASK_SHAPE[1])
         )
         valid = tf.logical_and(valid_loc, vis)
         keypoint_weights.append(valid)

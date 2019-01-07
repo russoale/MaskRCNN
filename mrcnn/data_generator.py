@@ -133,7 +133,7 @@ def load_image_gt(dataset, config, image_id, augmentation=None, use_mini_mask=Fa
     return image, image_meta, class_ids, bbox, mask, keypoints
 
 
-def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
+def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, config):
     """Generate targets for training Stage 2 classifier and mask heads.
     This is not used in normal training. It's useful for debugging or to train
     the Mask RCNN heads without using the RPN head.
@@ -144,6 +144,7 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
     gt_boxes: [instance count, (y1, x1, y2, x2)]
     gt_masks: [height, width, instance count] Ground truth masks. Can be full
               size or mini-masks.
+    gt_keypoints: [instance_count, NUM_KEYPOINS, (x, y, v)]
 
     Returns:
     rois: [TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)]
@@ -152,6 +153,14 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
             bbox refinements.
     masks: [TRAIN_ROIS_PER_IMAGE, height, width, NUM_CLASSES). Class specific masks cropped
            to bbox boundaries and resized to neural network output size.
+    keypoints: [TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS)
+                 Keypoint labels cropped to bbox boundaries and resized to neural
+                 network output size. Maps keypoints from the half-open interval [x1, x2) on continuous image
+                coordinates to the closed interval [0, HEATMAP_SIZE - 1]
+
+    keypoint_weights: [TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS), bool type
+                 Keypoint_weights, 0: isn't visible, 1: visilble
+
     """
     assert rpn_rois.shape[0] > 0
     assert gt_class_ids.dtype == np.int32, "Expected int but got {}".format(
@@ -160,16 +169,19 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
         gt_boxes.dtype)
     assert gt_masks.dtype == np.bool_, "Expected bool but got {}".format(
         gt_masks.dtype)
+    assert gt_keypoints.dtype == np.int32, "Expected int but got {}".format(
+        gt_keypoints.dtype)
 
     # It's common to add GT Boxes to ROIs but we don't do that here because
     # according to XinLei Chen's paper, it doesn't help.
 
-    # Trim empty padding in gt_boxes and gt_masks parts
+    # Trim empty padding in gt_boxes, gt_masks and gt_keypoints parts
     instance_ids = np.where(gt_class_ids > 0)[0]
     assert instance_ids.shape[0] > 0, "Image must contain instances."
     gt_class_ids = gt_class_ids[instance_ids]
     gt_boxes = gt_boxes[instance_ids]
     gt_masks = gt_masks[:, :, instance_ids]
+    gt_keypoints = gt_keypoints[instance_ids]
 
     # Compute areas of ROIs and ground truth boxes.
     rpn_roi_area = (rpn_rois[:, 2] - rpn_rois[:, 0]) * \
@@ -286,7 +298,50 @@ def build_detection_targets(rpn_rois, gt_class_ids, gt_boxes, gt_masks, config):
         mask = utils.resize(m, config.MASK_SHAPE)
         masks[i, :, :, class_id] = mask
 
-    return rois, roi_gt_class_ids, bboxes, masks
+    keypoints = np.zeros((config.TRAIN_ROIS_PER_IMAGE,
+                          config.NUM_KEYPOINTS), dtype=np.float32)
+    keypoint_weights = np.zeros((config.TRAIN_ROIS_PER_IMAGE,
+                                 config.NUM_KEYPOINTS), dtype=np.float32)
+
+    for i in pos_ids:
+        class_id = roi_gt_class_ids[i]
+        assert class_id > 0, "class id must be greater than 0"
+        if class_id == 1:
+            # Person class is class id 1
+            gt_id = roi_gt_assignment[i]
+            cur_keypoints = gt_keypoints[gt_id].astype(np.float32)
+            y1, x1, y2, x2 = rois[i]  # in image coords
+            scale_x = config.KEYPOINT_MASK_SHAPE[1] / (x2 - x1)
+            scale_y = config.KEYPOINT_MASK_SHAPE[0] / (y2 - y1)
+
+            for k in range(config.NUM_KEYPOINTS):
+                vis = cur_keypoints[k, 2] > 0
+                x = cur_keypoints[k, 0]
+                y = cur_keypoints[k, 1]  # in imgae coords
+
+                x_rel = x - x1
+                y_rel = y - y1
+
+                x_rel_map = int(x_rel * scale_x + 0.5)
+                y_rel_map = int(y_rel * scale_y + 0.5)
+
+                if x_rel_map == config.KEYPOINT_MASK_SHAPE[1]:
+                    x_rel_map = config.KEYPOINT_MASK_SHAPE[1] - 1
+                if y_rel_map == config.KEYPOINT_MASK_SHAPE[0]:
+                    y_rel_map = config.KEYPOINT_MASK_SHAPE[0] - 1
+
+                valid = 0 <= x_rel_map < config.KEYPOINT_MASK_SHAPE[1] and \
+                        0 <= y_rel_map < config.KEYPOINT_MASK_SHAPE[0]
+                valid = valid and vis
+                if not valid:
+                    x_rel_map, y_rel_map = 0.0, 0.0
+
+                keypoint_weights[i, k] = valid
+
+                keypoint_label = y_rel_map * config.KEYPOINT_MASK_SHAPE[1] + x_rel_map
+                keypoints[i, k] = keypoint_label
+
+    return rois, roi_gt_class_ids, bboxes, masks, keypoints, keypoint_weights
 
 
 def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
@@ -531,8 +586,6 @@ class DataGenerator(KU.Sequence):
         self.random_rois = random_rois
         self.batch_size = batch_size
         self.detection_targets = detection_targets
-        if self.detection_targets:
-            warnings.warn("detection_targets=True not supported by DataKeypointGenerator!")
         self.no_augmentation_sources = no_augmentation_sources or []
 
         self.pid = os.getpid()
@@ -599,8 +652,15 @@ class DataGenerator(KU.Sequence):
                 if not np.any(gt_class_ids > 0):
                     continue
 
-                if np.sum(gt_boxes[:, :5]) <= 0:
+                if np.sum(gt_boxes[:, :4]) <= 0:
                     continue
+
+                # Filter out all instances with class_id = 0.
+                # This can happen if due to image augmentation instances are cropped / rotated out of the input image
+                active_indices = np.where(gt_class_ids != 0)
+                gt_class_ids = gt_class_ids[active_indices]
+                gt_boxes = gt_boxes[active_indices]
+                gt_keypoints = gt_keypoints[active_indices]
 
                 # RPN Targets
                 rpn_match, rpn_bbox = build_rpn_targets(image.shape, self.anchors,
@@ -611,9 +671,9 @@ class DataGenerator(KU.Sequence):
                     rpn_rois = generate_random_rois(
                         image.shape, self.random_rois, gt_class_ids, gt_boxes)
                     if self.detection_targets:
-                        rois, mrcnn_class_ids, mrcnn_bbox, mrcnn_mask = \
+                        rois, mrcnn_class_ids, mrcnn_bbox, mrcnn_mask, mrcnn_keypoints, mrcnn_keypoint_weights = \
                             build_detection_targets(
-                                rpn_rois, gt_class_ids, gt_boxes, gt_masks, self.config)
+                                rpn_rois, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, self.config)
 
                 # Init batch arrays
                 if b == 0:
@@ -635,7 +695,6 @@ class DataGenerator(KU.Sequence):
                         (self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
                          self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
 
-                    # Not implemented for keypoint mask and no need here
                     if self.random_rois:
                         batch_rpn_rois = np.zeros(
                             (self.batch_size, rpn_rois.shape[0], 4), dtype=rpn_rois.dtype)
@@ -648,6 +707,10 @@ class DataGenerator(KU.Sequence):
                                 (self.batch_size,) + mrcnn_bbox.shape, dtype=mrcnn_bbox.dtype)
                             batch_mrcnn_mask = np.zeros(
                                 (self.batch_size,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
+                            batch_mrcnn_keypoints = np.zeros(
+                                (self.batch_size,) + mrcnn_keypoints.shape, dtype=mrcnn_keypoints.dtype)
+                            batch_mrcnn_keypoint_weights = np.zeros(
+                                (self.batch_size,) + mrcnn_keypoint_weights.shape, dtype=mrcnn_keypoint_weights.dtype)
 
                 # If more instances than fits in the array, sub-sample from them.
                 if gt_boxes.shape[0] > self.config.MAX_GT_INSTANCES:
@@ -667,7 +730,7 @@ class DataGenerator(KU.Sequence):
                 batch_gt_boxes[b, :gt_boxes.shape[0]] = gt_boxes
                 batch_gt_masks[b, :, :, :gt_masks.shape[-1]] = gt_masks
                 batch_gt_keypoints[b, :gt_keypoints.shape[0], :, :] = gt_keypoints
-                # Not implemented for keypoint_mask and no need here.
+
                 if self.random_rois:
                     batch_rpn_rois[b] = rpn_rois
                     if self.detection_targets:
@@ -675,6 +738,8 @@ class DataGenerator(KU.Sequence):
                         batch_mrcnn_class_ids[b] = mrcnn_class_ids
                         batch_mrcnn_bbox[b] = mrcnn_bbox
                         batch_mrcnn_mask[b] = mrcnn_mask
+                        batch_mrcnn_keypoints[b] = mrcnn_keypoints
+                        batch_mrcnn_keypoint_weights[b] = mrcnn_keypoint_weights
 
                 # Data item successfully processed, go to next batch entry
                 b += 1
@@ -702,6 +767,7 @@ class DataGenerator(KU.Sequence):
                 batch_mrcnn_class_ids = np.expand_dims(
                     batch_mrcnn_class_ids, -1)
                 outputs.extend(
-                    [batch_mrcnn_class_ids, batch_mrcnn_bbox, batch_mrcnn_mask])
+                    [batch_mrcnn_class_ids, batch_mrcnn_bbox, batch_mrcnn_mask, batch_mrcnn_keypoints,
+                     batch_mrcnn_keypoint_weights])
 
         return inputs, outputs
