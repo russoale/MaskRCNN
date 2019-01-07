@@ -85,7 +85,7 @@ class CocoConfig(Config):
 
     # We use a GPU with 12GB memory, which can fit two images.
     # Adjust down if you use a smaller GPU.
-    IMAGES_PER_GPU = 2
+    IMAGES_PER_GPU = 4
 
     # Uncomment to train on 8 GPUs (default is 1)
     GPU_COUNT = 2
@@ -670,11 +670,11 @@ if __name__ == '__main__':
         lr_values = [config.LEARNING_RATE,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
-        epochs_values = [10,
+        epochs_values = [40,
                          120,
                          160]
         trainable_layers = ["heads",
-                            "all",
+                            "4+",
                             "all"]
 
         last_layers = None
