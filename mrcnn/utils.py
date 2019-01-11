@@ -100,7 +100,7 @@ def create_keypoints(keypoint):
 
 # keep initial keypoint shape for proper loss calculation
 def convert_back(ia_keypoints, init_keypoints):
-    keypoints = np.zeros(init_keypoints.shape, np.int8)
+    keypoints = np.zeros(init_keypoints.shape, np.int16)
     num_person = init_keypoints.shape[0]
     num_keypoint = init_keypoints.shape[1]
     for i in range(num_person):

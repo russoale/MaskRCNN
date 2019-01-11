@@ -598,7 +598,6 @@ if __name__ == '__main__':
             IMAGES_PER_GPU = 1
             DETECTION_MIN_CONFIDENCE = 0
 
-
         config = InferenceConfig()
 
     config.display()
@@ -683,32 +682,6 @@ if __name__ == '__main__':
             last_epoch, _ = model.get_epoch_and_date_from_model_path(model_path=model_path)
         weights_loaded = False
         can_load_optimizer_weights = args.continue_training
-
-        # # Training - Stage 1
-        # print("Training network heads")
-        # model.train(dataset_train, dataset_val,
-        #             learning_rate=config.LEARNING_RATE,
-        #             epochs=40,
-        #             layers='heads',
-        #             augmentation=augmentation)
-        #
-        # # Training - Stage 2
-        # # Finetune layers from ResNet stage 4 and up
-        # print("Fine tune Resnet stage 4 and up")
-        # model.train(dataset_train, dataset_val,
-        #             learning_rate=config.LEARNING_RATE / 100,
-        #             epochs=120,
-        #             layers='4+',
-        #             augmentation=augmentation)
-        #
-        # # Training - Stage 3
-        # # Fine tune all layers
-        # print("Fine tune all layers")
-        # model.train(dataset_train, dataset_val,
-        #             learning_rate=config.LEARNING_RATE / 100,
-        #             epochs=160,
-        #             layers='all',
-        #             augmentation=augmentation)
 
         # Run all training phases
         for i_t, (lr, epochs, layers) in enumerate(zip(lr_values, epochs_values, trainable_layers)):
