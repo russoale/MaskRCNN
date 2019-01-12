@@ -6,21 +6,19 @@ Copyright (c) 2017 Matterport, Inc.
 Licensed under the MIT License (see LICENSE for details)
 Written by Waleed Abdulla
 """
+import urllib.request
+from distutils.version import LooseVersion
 
-import sys
-import os
-import math
-import random
 import numpy as np
-import tensorflow as tf
+import os
+import random
 import scipy
+import shutil
 import skimage.color
 import skimage.io
 import skimage.transform
-import urllib.request
-import shutil
+import tensorflow as tf
 import warnings
-from distutils.version import LooseVersion
 
 # URL from which to download the latest COCO trained weights
 COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0/mask_rcnn_coco.h5"
@@ -50,68 +48,6 @@ def bilinear_upsample_weights(factor, number_of_classes):
         weights[:, :, i, i] = upsample_kernel
     return weights
 
-
-def keypoint_to_mask(keypoints, height, width):
-    """Convert keypoints to masks and it's weight.
-       keypoints: [num_person, num_keypoint, 3].
-       height,width: the generated mask shape
-
-       Returns:
-           keypoint_mask: A bool array of shape [height, width, num_person, num_keypoint] with
-            one mask per joint..
-           keypoint_weight: A int array of shape [num_person, num_keypoint] one value per joint
-           0: not visible and without annotations
-           1: not visible but with annotations
-           2: visible and with annotations
-       """
-    shape = np.shape(keypoints)
-
-    keypoint_mask = np.zeros([height, width, shape[0], shape[1]], dtype=bool)
-    keypoint_weight = np.zeros([shape[0], shape[1]], dtype=int)
-    for i in range(shape[0]):
-        for j in range(shape[1]):
-            J = keypoints[i, j]
-            # print(J)
-            if (J[2]):
-                keypoint_mask[J[1], J[0], i, j] = 1
-            keypoint_weight[i, j] = J[2]
-    # keypoint_mask = np.reshape(keypoint_mask,[height,width,-1])
-    # keypoint_weight = np.reshape(keypoint_weight,[-1])
-    return keypoint_mask, keypoint_weight
-
-
-def create_keypoints(keypoint):
-    import imgaug as ia
-
-    ia_keypoint = []
-    keypoint_shape = np.shape(keypoint)
-    num_person = keypoint_shape[0]
-    num_keypoint = keypoint_shape[1]
-    for i in range(num_person):
-        for j in range(num_keypoint):
-            if keypoint[i, j, 2] != 0:
-                ia_keypoint.append(ia.Keypoint(x=keypoint[i, j, 0], y=keypoint[i, j, 1]))
-            else:
-                # Maintain COCO convention that if visibility == 0, then x, y = 0
-                ia_keypoint.append(ia.Keypoint(x=0, y=0))
-
-    return ia_keypoint
-
-
-# keep initial keypoint shape for proper loss calculation
-def convert_back(ia_keypoints, init_keypoints):
-    keypoints = np.zeros(init_keypoints.shape, np.int16)
-    num_person = init_keypoints.shape[0]
-    num_keypoint = init_keypoints.shape[1]
-    for i in range(num_person):
-        for j in range(num_keypoint):
-            index = (i + 1) * (j + 1) - 1
-            kp = ia_keypoints.keypoints[index]
-            keypoints[i, j, 0] = kp.x
-            keypoints[i, j, 1] = kp.y
-            keypoints[i, j, 2] = init_keypoints[i, j, 2]
-
-    return keypoints
 
 ############################################################
 #  Bounding Boxes
@@ -324,175 +260,8 @@ def box_refinement(box, gt_box):
 
 
 ############################################################
-#  Dataset
+#  Image Helpers
 ############################################################
-
-class Dataset(object):
-    """The base class for dataset classes.
-    To use it, create a new class that adds functions specific to the dataset
-    you want to use. For example:
-
-    class CatsAndDogsDataset(Dataset):
-        def load_cats_and_dogs(self):
-            ...
-        def load_mask(self, image_id):
-            ...
-        def image_reference(self, image_id):
-            ...
-
-    See COCODataset and ShapesDataset as examples.
-    """
-
-    def __init__(self, class_map=None):
-        self._image_ids = []
-        self.image_info = []
-        # Background is always the first class
-        self.class_info = [{"source": "", "id": 0, "name": "BG"}]
-        self.source_class_ids = {}
-
-    def add_class(self, source, class_id, class_name):
-        assert "." not in source, "Source name cannot contain a dot"
-        # Does the class exist already?
-        for info in self.class_info:
-            if info['source'] == source and info["id"] == class_id:
-                # source.class_id combination already available, skip
-                return
-        # Add the class
-        self.class_info.append({
-            "source": source,
-            "id": class_id,
-            "name": class_name,
-        })
-
-    def add_image(self, source, image_id, path, **kwargs):
-        image_info = {
-            "id": image_id,
-            "source": source,
-            "path": path,
-        }
-        image_info.update(kwargs)
-        self.image_info.append(image_info)
-
-    def image_reference(self, image_id):
-        """Return a link to the image in its source Website or details about
-        the image that help looking it up or debugging it.
-
-        Override for your dataset, but pass to this function
-        if you encounter images not in your dataset.
-        """
-        return ""
-
-    def prepare(self, class_map=None):
-        """Prepares the Dataset class for use.
-
-        TODO: class map is not supported yet. When done, it should handle mapping
-              classes from different datasets to the same class ID.
-        """
-
-        def clean_name(name):
-            """Returns a shorter version of object names for cleaner display."""
-            return ",".join(name.split(",")[:1])
-
-        # Build (or rebuild) everything else from the info dicts.
-        self.num_classes = len(self.class_info)
-        self.class_ids = np.arange(self.num_classes)
-        self.class_names = [clean_name(c["name"]) for c in self.class_info]
-        self.num_images = len(self.image_info)
-        self._image_ids = np.arange(self.num_images)
-
-        # Mapping from source class and image IDs to internal IDs
-        self.class_from_source_map = {"{}.{}".format(info['source'], info['id']): id
-                                      for info, id in zip(self.class_info, self.class_ids)}
-        self.image_from_source_map = {"{}.{}".format(info['source'], info['id']): id
-                                      for info, id in zip(self.image_info, self.image_ids)}
-
-        # Map sources to class_ids they support
-        self.sources = list(set([i['source'] for i in self.class_info]))
-        self.source_class_ids = {}
-        # Loop over datasets
-        for source in self.sources:
-            self.source_class_ids[source] = []
-            # Find classes that belong to this dataset
-            for i, info in enumerate(self.class_info):
-                # Include BG class in all datasets
-                if i == 0 or source == info['source']:
-                    self.source_class_ids[source].append(i)
-
-    def map_source_class_id(self, source_class_id):
-        """Takes a source class ID and returns the int class ID assigned to it.
-
-        For example:
-        dataset.map_source_class_id("coco.12") -> 23
-        """
-        return self.class_from_source_map[source_class_id]
-
-    def get_source_class_id(self, class_id, source):
-        """Map an internal class ID to the corresponding class ID in the source dataset."""
-        info = self.class_info[class_id]
-        assert info['source'] == source
-        return info['id']
-
-    @property
-    def image_ids(self):
-        return self._image_ids
-
-    def source_image_link(self, image_id):
-        """Returns the path or URL to the image.
-        Override this to return a URL to the image if it's available online for easy
-        debugging.
-        """
-        return self.image_info[image_id]["path"]
-
-    def load_image(self, image_id):
-        """Load the specified image and return a [H,W,3] Numpy array.
-        """
-        # Load image
-        image = skimage.io.imread(self.image_info[image_id]['path'])
-        # If grayscale. Convert to RGB for consistency.
-        if image.ndim != 3:
-            image = skimage.color.gray2rgb(image)
-        # If has an alpha channel, remove it for consistency
-        if image.shape[-1] == 4:
-            image = image[..., :3]
-        return image
-
-    def load_mask(self, image_id):
-        """Load instance masks for the given image.
-
-        Different datasets use different ways to store masks. Override this
-        method to load instance masks and return them in the form of am
-        array of binary masks of shape [height, width, instances].
-
-        Returns:
-            masks: A bool array of shape [height, width, instance count] with
-                a binary mask per instance.
-            class_ids: a 1D array of class IDs of the instance masks.
-        """
-        # Override this function to load a mask from your dataset.
-        # Otherwise, it returns an empty mask.
-        mask = np.empty([0, 0, 0])
-        class_ids = np.empty([0], np.int32)
-        return mask, class_ids
-
-    def load_mask_keypoints(self, image_id):
-        """Load keypoints for the given image.
-
-        Different datasets use different ways to store masks. Override this
-        method to load keypoints and return them in the form of am
-        array of coordinate(x,y) of shape [num_keypoints, 3].
-
-        Returns:
-            keypoints: A  array of coordinate and visibility [num_keypoints, 3] with
-                (x,y, v) per instance.
-            class_ids: a 1D array of class IDs of the person, always equal to [1].
-        """
-        # Override this function to load a mask from your dataset.
-        # Otherwise, it returns an empty mask.
-        keypoints = np.empty([0, 0])
-        mask = np.empty([0, 0, 0])
-        class_ids = np.empty([0], np.int32)
-        return mask, keypoints, class_ids
-
 
 def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square"):
     """Resizes an image keeping the aspect ratio unchanged.
@@ -601,6 +370,10 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
     return image.astype(image_dtype), window, scale, padding, crop
 
 
+############################################################
+#  Mask
+############################################################
+
 def resize_mask(mask, scale, padding, crop=None):
     """Resizes a mask using the given scale and padding.
     Typically, you get the scale and padding from resize_image() to
@@ -683,6 +456,89 @@ def unmold_mask(mask, bbox, image_shape):
     full_mask = np.zeros(image_shape[:2], dtype=np.bool)
     full_mask[y1:y2, x1:x2] = mask
     return full_mask
+
+
+############################################################
+#  Keypoints
+############################################################
+
+
+def keypoint_to_mask(keypoints, height, width):
+    """Convert keypoints to masks and it's weight.
+       keypoints: [num_person, num_keypoint, 3].
+       height,width: the generated mask shape
+
+       Returns:
+           keypoint_mask: A bool array of shape [height, width, num_person, num_keypoint] with
+            one mask per joint..
+           keypoint_weight: A int array of shape [num_person, num_keypoint] one value per joint
+           0: not visible and without annotations
+           1: not visible but with annotations
+           2: visible and with annotations
+       """
+    shape = np.shape(keypoints)
+
+    keypoint_mask = np.zeros([height, width, shape[0], shape[1]], dtype=bool)
+    keypoint_weight = np.zeros([shape[0], shape[1]], dtype=int)
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            J = keypoints[i, j]
+            # print(J)
+            if (J[2]):
+                keypoint_mask[J[1], J[0], i, j] = 1
+            keypoint_weight[i, j] = J[2]
+    # keypoint_mask = np.reshape(keypoint_mask,[height,width,-1])
+    # keypoint_weight = np.reshape(keypoint_weight,[-1])
+    return keypoint_mask, keypoint_weight
+
+
+def create_keypoints(keypoint):
+    """Converts keypoints into imaug ia.Keypoint for augmentation
+
+    keypoint: [N, num_keypoints, [x, y, vis]]
+
+    Returns:
+    ia_keypoints: [ia.Keypoints]
+    """
+    import imgaug as ia
+
+    ia_keypoint = []
+    keypoint_shape = np.shape(keypoint)
+    num_person = keypoint_shape[0]
+    num_keypoint = keypoint_shape[1]
+    for i in range(num_person):
+        for j in range(num_keypoint):
+            if keypoint[i, j, 2] != 0:
+                ia_keypoint.append(ia.Keypoint(x=keypoint[i, j, 0], y=keypoint[i, j, 1]))
+            else:
+                # Maintain COCO convention that if visibility == 0, then x, y = 0
+                ia_keypoint.append(ia.Keypoint(x=0, y=0))
+
+    return ia_keypoint
+
+
+def convert_back(ia_keypoints, init_keypoints):
+    """Convert list of ia.Keypoints back to original keypoint shape
+    for correct ground truth calculation
+
+    ia_keypoints: [ia.Keypoints]
+    init_keypoints: initial keypoint of shape [N, num_keypoints, [x, y, vis]]
+
+    Returns:
+    keypoints: [N, num_keypoints, [x, y, vis]]
+    """
+    keypoints = np.zeros(init_keypoints.shape, np.int16)
+    num_person = init_keypoints.shape[0]
+    num_keypoint = init_keypoints.shape[1]
+    for i in range(num_person):
+        for j in range(num_keypoint):
+            index = (i + 1) * (j + 1) - 1
+            kp = ia_keypoints.keypoints[index]
+            keypoints[i, j, 0] = kp.x
+            keypoints[i, j, 1] = kp.y
+            keypoints[i, j, 2] = init_keypoints[i, j, 2]
+
+    return keypoints
 
 
 def get_keypoints():
@@ -772,17 +628,6 @@ def resize_keypoints(keypoint, new_size, scale, padding):
             y = y + padding[0][0]
             keypoint[i, j, :2] = [x, y]
 
-    # keypoint[:,:,0] = np.array(keypoint[:,:,0]*scale + 0.5).astype(int)
-    # keypoint[:,:,1] = np.array(keypoint[:,:,1]*scale + 0.5).astype(int)
-    # X = keypoint[:,:,0]
-    # Y = keypoint[:,:,1]
-    # X[X>=new_size[1]] = new_size[1] -1
-    # Y[Y>=new_size[0]] = new_size[0] - 1
-    # X = X + padding[1,0]
-    # Y = Y + padding[0,0]
-    # keypoint[:, :, 0] =X
-    # keypoint[:, :, 1] = Y
-
     return keypoint
 
 
@@ -859,45 +704,193 @@ def expand_keypoint_mask(bbox, mini_mask, image_shape):
     return keypoint_mask
 
 
-def unmold_keypoint_mask(keypoints_prob, bbox, image_shape, mask, keypoint_mask_shape=(56, 56),
-                         keypoint_threshold=0.08):
+def unmold_keypoint_mask(mask, bbox, keypoints, image_shape, keypoint_mask_shape=(56, 56),
+                         keypoint_threshold=0.05):
     """Converts a mask generated by the neural network into a format similar
     to it's original shape.
-    keypoints_probe: [num_keypoints, 56*56] of type float.
-    bbox: [y1, x1, y2, x2]. The box to fit the mask in.
-    image_shape:
-    mask: [height, width, channel] of type float. A small, typically 28x28 mask.
-    keypoint_mask_shape:
-    keypoint_threshold: the threshold for filter the low confident keypoint
-    Returns
-    full_mask: [image_shape[0],image_shape[1], num_keypoints]a binary mask with the same size as the original image.
-    keypoints: [num_keypoints, 3] for (x , y, valid)
+    Input:
+        mask: [height, width, channel] of type float. A small, typically 28x28 mask.
+        bbox: [y1, x1, y2, x2]. The box to fit the mask in.
+        keypoints: [num_keypoints, 56*56] of type float.
+        image_shape: shape of the original image
+        keypoint_mask_shape: shape of the mask computed in the network
+        keypoint_threshold: the threshold for filter the low confident keypoint
+
+    Returns:
+        full_mask: [image_shape[0],image_shape[1], num_keypoints]a  binary mask with the same size as the original image.
+        keypoints: [num_keypoints, 3] for (x , y, visibility)
     """
 
-    keypoints_label = np.argmax(keypoints_prob, 1)
-    keypoint_score = np.max(keypoints_prob, 1)
-
-    # print(keypoint_score)
+    keypoints_label = np.argmax(keypoints, 1)
+    keypoint_score = np.max(keypoints, 1)
 
     J_y = keypoints_label // keypoint_mask_shape[1]
     J_x = keypoints_label % keypoint_mask_shape[1]
+
+    # compute bbox normalized coordinates
     box_height = float(bbox[2] - bbox[0])
     box_width = float(bbox[3] - bbox[1])
+
     x_scale = box_width / keypoint_mask_shape[1]
     y_scale = box_height / keypoint_mask_shape[0]
     x_shift = bbox[1]
     y_shift = bbox[0]
+
     J_x = np.array(x_scale * J_x + 0.5).astype(int) + x_shift
     J_y = np.array(y_scale * J_y + 0.5).astype(int) + y_shift
-    # print("J_x", J_x)
-    # print("J_y",J_y)
-    J_v = np.array(keypoint_score > keypoint_threshold).astype(int)
-    keypoints = np.stack([J_x, J_y, J_v], axis=1)
+    J_vis = np.array(keypoint_score > keypoint_threshold).astype(int)
 
-    # print("J_v",J_v)
+    full_keypoints = np.stack([J_x, J_y, J_vis], axis=1)
+
+    # convert mask back to original input image shape
     full_mask = unmold_mask(mask, bbox, image_shape)
 
-    return keypoints, full_mask
+    return full_keypoints, full_mask
+
+
+def unmold_detections(detections, mrcnn_mask, original_image_shape,
+                      image_shape, window):
+    """Reformats the detections of one image from the format of the neural
+    network output to a format suitable for use in the rest of the
+    application.
+
+    detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
+    mrcnn_mask: [N, height, width, num_classes]
+    original_image_shape: [H, W, C] Original image shape before resizing
+    image_shape: [H, W, C] Shape of the image after resizing and padding
+    window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
+            image is excluding the padding.
+
+    Returns:
+    boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+    class_ids: [N] Integer class IDs for each bounding box
+    scores: [N] Float probability scores of the class_id
+    masks: [height, width, num_instances] Instance masks
+    """
+    # How many detections do we have?
+    # Detections array is padded with zeros. Find the first class_id == 0.
+    zero_ix = np.where(detections[:, 4] == 0)[0]
+    N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
+
+    # Extract boxes, class_ids, scores, and class-specific masks
+    boxes = detections[:N, :4]
+    class_ids = detections[:N, 4].astype(np.int32)
+    scores = detections[:N, 5]
+    masks = mrcnn_mask[np.arange(N), :, :, class_ids]
+
+    # Translate normalized coordinates in the resized image to pixel
+    # coordinates in the original image before resizing
+    window = norm_boxes(window, image_shape[:2])
+    wy1, wx1, wy2, wx2 = window
+    shift = np.array([wy1, wx1, wy1, wx1])
+    wh = wy2 - wy1  # window height
+    ww = wx2 - wx1  # window width
+    scale = np.array([wh, ww, wh, ww])
+    # Convert boxes to normalized coordinates on the window
+    boxes = np.divide(boxes - shift, scale)
+    # Convert boxes to pixel coordinates on the original image
+    boxes = denorm_boxes(boxes, original_image_shape[:2])
+
+    # Filter out detections with zero area. Happens in early training when
+    # network weights are still random
+    exclude_ix = np.where(
+        (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
+    if exclude_ix.shape[0] > 0:
+        boxes = np.delete(boxes, exclude_ix, axis=0)
+        class_ids = np.delete(class_ids, exclude_ix, axis=0)
+        scores = np.delete(scores, exclude_ix, axis=0)
+        masks = np.delete(masks, exclude_ix, axis=0)
+        N = class_ids.shape[0]
+
+    # Resize masks to original image size and set boundary threshold.
+    full_masks = []
+    for i in range(N):
+        # Convert neural network mask to full size mask
+        full_mask = unmold_mask(masks[i], boxes[i], original_image_shape)
+        full_masks.append(full_mask)
+    full_masks = np.stack(full_masks, axis=-1) \
+        if full_masks else np.empty(original_image_shape[:2] + (0,))
+
+    return boxes, class_ids, scores, full_masks
+
+
+def unmold_keypoint_detections(config, original_image_shape, image_shape, detections,
+                               window, mrcnn_mask, mrcnn_keypoints):
+    """Reformats the detections of one image from the format of the neural
+    network output to a format suitable for use in the rest of the
+    application.
+
+    detections: [N, (y1, x1, y2, x2, class_id, score)]
+    image_shape: [height, width, depth] Original size of the image before resizing
+    original_image_shape: [H, W, C] Original image shape before resizing
+    window: [y1, x1, y2, x2] Box in the image where the real image is
+            excluding the padding.
+    mrcnn_mask: [N, height, width, num_classes]
+    mrcnn_keypoints: [N, num_keypoints, height*width]
+    keypoint_threshold: defaults to 0.05
+
+    Returns:
+    boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+    class_ids: [N] Integer class IDs for each bounding box
+    scores: [N] Float probability scores of the class_id
+    masks: [height, width, N] Instance masks
+    keypoints:[N, num_keypoints]
+    """
+    # How many detections do we have?
+    # Detections array is padded with zeros. Find the first class_id == 0.
+    zero_ix = np.where(detections[:, 4] == 0)[0]
+    N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
+
+    # Extract boxes, class_ids, scores, class-specific masks and keypoints
+    boxes = detections[:N, :4]
+    class_ids = detections[:N, 4].astype(np.int32)
+    scores = detections[:N, 5]
+    masks = mrcnn_mask[np.arange(N), :, :, class_ids]
+    keypoints = mrcnn_keypoints[:N, :, :]
+
+    # Translate normalized coordinates in the resized image to pixel
+    # coordinates in the original image before resizing
+    window = norm_boxes(window, image_shape[:2])
+    wy1, wx1, wy2, wx2 = window
+    shift = np.array([wy1, wx1, wy1, wx1])
+    wh = wy2 - wy1  # window height
+    ww = wx2 - wx1  # window width
+    scale = np.array([wh, ww, wh, ww])
+    # Convert boxes to normalized coordinates on the window
+    boxes = np.divide(boxes - shift, scale)
+    # Convert boxes to pixel coordinates on the original image
+    boxes = denorm_boxes(boxes, original_image_shape[:2])
+
+    # Filter out detections with zero area. Often only happens in early
+    # stages of training when the network weights are still a bit random.
+    exclude_ix = np.where(
+        (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
+    if exclude_ix.shape[0] > 0:
+        boxes = np.delete(boxes, exclude_ix, axis=0)
+        class_ids = np.delete(class_ids, exclude_ix, axis=0)
+        scores = np.delete(scores, exclude_ix, axis=0)
+        masks = np.delete(masks, exclude_ix, axis=0)
+        keypoints = np.delete(keypoints, exclude_ix, axis=0)
+        N = class_ids.shape[0]
+
+    # Resize masks to original image size and set boundary threshold.
+    full_masks = []
+    full_keypoints = []
+    for i in range(N):
+        # Convert neural network mask to full size mask
+        full_keypoints, full_mask = unmold_keypoint_mask(masks[i], boxes[i], keypoints[i],
+                                                         original_image_shape,
+                                                         keypoint_mask_shape=config.KEYPOINT_MASK_SHAPE,
+                                                         keypoint_threshold=config.KEYPOINT_THRESHOLD)
+        full_masks.append(full_mask)
+        full_keypoints.append(full_keypoints)
+
+    full_keypoints = np.stack(full_keypoints, axis=0) \
+        if full_keypoints else np.empty((0,) + (keypoints.shape[1], 3))
+    full_masks = np.stack(full_masks, axis=-1) \
+        if full_masks else np.empty((0,) + masks.shape[1:3])
+
+    return boxes, class_ids, scores, full_masks, full_keypoints
 
 
 ############################################################
@@ -1172,6 +1165,73 @@ def download_trained_weights(coco_model_path, verbose=1):
         shutil.copyfileobj(resp, out)
     if verbose > 0:
         print("... done downloading pretrained model!")
+
+
+def get_epoch_and_date_from_model_path(model_path):
+    """Get epoch and date from the weights file
+
+    model_path: path to model weight file (/path/to/logs/mask_rcnn_*.h5)
+
+    Returns:
+        epoch: epoch of the last run
+        date: started date of training run
+    """
+    import re
+    import datetime
+    regex = r".*[/\\][\w-]+(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})[/\\]mask\_rcnn\_[\w-]+(\d{4})\.h5"
+    m = re.match(regex, model_path)
+    epoch = None
+    date = None
+    if m:
+        date = datetime.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                                 int(m.group(4)), int(m.group(5)))
+        epoch = int(m.group(6))
+    return epoch, date
+
+
+def find_last(config, model_dir):
+    """Finds the last checkpoint file of the last trained model in the
+    model directory.
+    Returns:
+        The path of the last checkpoint file
+    """
+    # Get directory names. Each directory corresponds to a model
+    dir_names = next(os.walk(model_dir))[1]
+    key = config.NAME.lower()
+    dir_names = filter(lambda f: f.startswith(key), dir_names)
+    dir_names = sorted(dir_names)
+    if not dir_names:
+        import errno
+        raise FileNotFoundError(
+            errno.ENOENT,
+            "Could not find model directory under {}".format(model_dir))
+    # Pick last directory
+    dir_name = os.path.join(model_dir, dir_names[-1])
+    # Find the last checkpoint
+    checkpoints = next(os.walk(dir_name))[2]
+    checkpoints = filter(lambda f: f.startswith("mask_rcnn"), checkpoints)
+    checkpoints = sorted(checkpoints)
+    if not checkpoints:
+        import errno
+        raise FileNotFoundError(
+            errno.ENOENT, "Could not find weight files in {}".format(dir_name))
+    checkpoint = os.path.join(dir_name, checkpoints[-1])
+    return checkpoint
+
+
+def get_imagenet_weights():
+    """Downloads ImageNet trained weights from Keras.
+    Returns path to weights file.
+    """
+    from keras.utils.data_utils import get_file
+    TF_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/' \
+                             'releases/download/v0.2/' \
+                             'resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5'
+    weights_path = get_file('resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5',
+                            TF_WEIGHTS_PATH_NO_TOP,
+                            cache_subdir='models',
+                            md5_hash='a268eb855778b3df3c7506639542a6af')
+    return weights_path
 
 
 def norm_boxes(boxes, shape):
