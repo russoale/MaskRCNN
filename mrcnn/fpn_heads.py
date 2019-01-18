@@ -1,6 +1,5 @@
-from keras import layers as KL, backend as K
-
 import tensorflow as tf
+from keras import layers as KL, backend as K
 
 from mrcnn.batch_norm import BatchNorm
 from mrcnn.roi_align_layer import PyramidROIAlign

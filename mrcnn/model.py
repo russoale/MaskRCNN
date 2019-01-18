@@ -28,7 +28,7 @@ from mrcnn.data_generator import DataGenerator
 from mrcnn.detection_layer import DetectionLayer
 from mrcnn.fpn_heads import fpn_classifier_graph, build_fpn_mask_graph, build_fpn_keypoint_graph
 from mrcnn.keypoint_layer import DetectionKeypointTargetLayer
-from mrcnn.load_weights import load_all_weights, ModelCheckpointWithOptimizer
+from mrcnn.load_weights import ModelCheckpointWithOptimizer
 from mrcnn.loss_functions import rpn_class_loss_graph, rpn_bbox_loss_graph, mrcnn_class_loss_graph, \
     mrcnn_bbox_loss_graph, mrcnn_mask_loss_graph, mrcnn_keypoint_loss_graph
 from mrcnn.misc_functions import norm_boxes_graph
@@ -46,7 +46,8 @@ assert LooseVersion(keras.__version__) >= LooseVersion('2.2.0')
 #  MaskRCNN Class
 ############################################################
 
-class MaskRCNN():
+
+class MaskRCNN:
     """Encapsulates the Mask RCNN model functionality.
 
     The actual Keras model is in the keras_model property.
@@ -62,7 +63,10 @@ class MaskRCNN():
         self.mode = mode
         self.config = config
         self.model_dir = model_dir
-        self.set_log_dir()
+        self.epoch = 0
+        self.log_dir = ""
+        self.checkpoint_path = ""
+        self.set_log_dir(model_dir)
         self.keras_model = self.build(mode=mode, config=config)
 
     def build(self, mode, config):
@@ -312,81 +316,6 @@ class MaskRCNN():
 
         return model
 
-    def find_last(self):
-        """Finds the last checkpoint file of the last trained model in the
-        model directory.
-        Returns:
-            The path of the last checkpoint file
-        """
-        # Get directory names. Each directory corresponds to a model
-        dir_names = next(os.walk(self.model_dir))[1]
-        key = self.config.NAME.lower()
-        dir_names = filter(lambda f: f.startswith(key), dir_names)
-        dir_names = sorted(dir_names)
-        if not dir_names:
-            import errno
-            raise FileNotFoundError(
-                errno.ENOENT,
-                "Could not find model directory under {}".format(self.model_dir))
-        # Pick last directory
-        dir_name = os.path.join(self.model_dir, dir_names[-1])
-        # Find the last checkpoint
-        checkpoints = next(os.walk(dir_name))[2]
-        checkpoints = filter(lambda f: f.startswith("mask_rcnn"), checkpoints)
-        checkpoints = sorted(checkpoints)
-        if not checkpoints:
-            import errno
-            raise FileNotFoundError(
-                errno.ENOENT, "Could not find weight files in {}".format(dir_name))
-        checkpoint = os.path.join(dir_name, checkpoints[-1])
-        return checkpoint
-
-    def load_weights(self, filepath, by_name=False, exclude=None, include_optimizer=True):
-        """Modified version of the corresponding Keras function with
-        the addition of multi-GPU support and the ability to exclude
-        some layers from loading.
-        exclude: list of layer names to exclude
-        include_optimizer: Load optimzer weights as well. Model has to be compiled beforehand.
-        """
-
-        if exclude:
-            by_name = True
-
-        # In multi-GPU training, we wrap the model. Get layers
-        # of the inner model because they have the weights.
-        keras_model = self.keras_model
-        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model") \
-            else keras_model.layers
-
-        if include_optimizer:
-            # Necessary to initialize the weight variables of the optimizer
-            keras_model._make_train_function()
-            assert keras_model.optimizer, "Model needs to be compiled with an optimizer to load optimizer weights"
-
-        # Exclude some layers
-        if exclude:
-            layers = filter(lambda l: l.name not in exclude, layers)
-
-        load_all_weights(keras_model, filepath, layers=layers, by_name=by_name,
-                         include_optimizer=include_optimizer)
-
-        # Update the log directory
-        self.set_log_dir(filepath)
-
-    def get_imagenet_weights(self):
-        """Downloads ImageNet trained weights from Keras.
-        Returns path to weights file.
-        """
-        from keras.utils.data_utils import get_file
-        TF_WEIGHTS_PATH_NO_TOP = 'https://github.com/fchollet/deep-learning-models/' \
-                                 'releases/download/v0.2/' \
-                                 'resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5'
-        weights_path = get_file('resnet50_weights_tf_dim_ordering_tf_kernels_notop.h5',
-                                TF_WEIGHTS_PATH_NO_TOP,
-                                cache_subdir='models',
-                                md5_hash='a268eb855778b3df3c7506639542a6af')
-        return weights_path
-
     def compile(self, layers):
         """Gets the model ready for training. Adds losses, regularization, and
         metrics. Then calls the Keras compile() function.
@@ -500,21 +429,6 @@ class MaskRCNN():
                 log("{}{:20}   ({})".format(" " * indent, layer.name,
                                             layer.__class__.__name__))
 
-    def get_epoch_and_date_from_model_path(self, model_path):
-        # Get epoch and date from the file name
-        # A sample model path might look like:
-        # \path\to\logs\coco20171029T2315\mask_rcnn_coco_0001.h5 (Windows)
-        # /path/to/logs/coco20171029T2315/mask_rcnn_coco_0001.h5 (Linux)
-        regex = r".*[/\\][\w-]+(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})[/\\]mask\_rcnn\_[\w-]+(\d{4})\.h5"
-        m = re.match(regex, model_path)
-        epoch = None
-        date = None
-        if m:
-            date = datetime.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
-                                     int(m.group(4)), int(m.group(5)))
-            epoch = int(m.group(6))
-        return epoch, date
-
     def set_log_dir(self, model_path=None):
         """Sets the model log directory and epoch counter.
 
@@ -524,13 +438,12 @@ class MaskRCNN():
             name.
         """
         # Set date and epoch counter as if starting a new model
-        self.epoch = 0
         now = datetime.datetime.now()
 
         # If we have a model path with date and epochs use them
         if model_path:
             # Continue from we left of.
-            epoch, date = self.get_epoch_and_date_from_model_path(model_path)
+            epoch, date = utils.get_epoch_and_date_from_model_path(model_path)
             if epoch is not None:
                 now = date
                 # Epoch number in file is 1-based, and in Keras code it's 0-based.
@@ -539,14 +452,16 @@ class MaskRCNN():
                 print('Re-starting from epoch %d' % self.epoch)
 
         # Directory for training logs
-        self.log_dir = os.path.join(self.model_dir, "{}{:%Y%m%dT%H%M}".format(
+        log_dir = os.path.join(self.model_dir, "{}{:%Y%m%dT%H%M}".format(
             self.config.NAME.lower(), now))
 
         # Path to save after each epoch. Include placeholders that get filled by Keras.
-        self.checkpoint_path = os.path.join(self.log_dir, "mask_rcnn_{}_*epoch*.h5".format(
+        checkpoint_path = os.path.join(log_dir, "mask_rcnn_{}_*epoch*.h5".format(
             self.config.NAME.lower()))
-        self.checkpoint_path = self.checkpoint_path.replace(
-            "*epoch*", "{epoch:04d}")
+        checkpoint_path = checkpoint_path.replace("*epoch*", "{epoch:04d}")
+
+        self.log_dir = log_dir
+        self.checkpoint_path = checkpoint_path
 
     def train(self, train_dataset, val_dataset, learning_rate, epochs,
               augmentation=None, custom_callbacks=None, no_augmentation_sources=None):
@@ -673,146 +588,6 @@ class MaskRCNN():
         windows = np.stack(windows)
         return molded_images, image_metas, windows
 
-    def unmold_detections(self, detections, mrcnn_mask, original_image_shape,
-                          image_shape, window):
-        """Reformats the detections of one image from the format of the neural
-        network output to a format suitable for use in the rest of the
-        application.
-
-        detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
-        mrcnn_mask: [N, height, width, num_classes]
-        original_image_shape: [H, W, C] Original image shape before resizing
-        image_shape: [H, W, C] Shape of the image after resizing and padding
-        window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
-                image is excluding the padding.
-
-        Returns:
-        boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
-        class_ids: [N] Integer class IDs for each bounding box
-        scores: [N] Float probability scores of the class_id
-        masks: [height, width, num_instances] Instance masks
-        """
-        # How many detections do we have?
-        # Detections array is padded with zeros. Find the first class_id == 0.
-        zero_ix = np.where(detections[:, 4] == 0)[0]
-        N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
-
-        # Extract boxes, class_ids, scores, and class-specific masks
-        boxes = detections[:N, :4]
-        class_ids = detections[:N, 4].astype(np.int32)
-        scores = detections[:N, 5]
-        masks = mrcnn_mask[np.arange(N), :, :, class_ids]
-
-        # Translate normalized coordinates in the resized image to pixel
-        # coordinates in the original image before resizing
-        window = utils.norm_boxes(window, image_shape[:2])
-        wy1, wx1, wy2, wx2 = window
-        shift = np.array([wy1, wx1, wy1, wx1])
-        wh = wy2 - wy1  # window height
-        ww = wx2 - wx1  # window width
-        scale = np.array([wh, ww, wh, ww])
-        # Convert boxes to normalized coordinates on the window
-        boxes = np.divide(boxes - shift, scale)
-        # Convert boxes to pixel coordinates on the original image
-        boxes = utils.denorm_boxes(boxes, original_image_shape[:2])
-
-        # Filter out detections with zero area. Happens in early training when
-        # network weights are still random
-        exclude_ix = np.where(
-            (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
-        if exclude_ix.shape[0] > 0:
-            boxes = np.delete(boxes, exclude_ix, axis=0)
-            class_ids = np.delete(class_ids, exclude_ix, axis=0)
-            scores = np.delete(scores, exclude_ix, axis=0)
-            masks = np.delete(masks, exclude_ix, axis=0)
-            N = class_ids.shape[0]
-
-        # Resize masks to original image size and set boundary threshold.
-        full_masks = []
-        for i in range(N):
-            # Convert neural network mask to full size mask
-            full_mask = utils.unmold_mask(masks[i], boxes[i], original_image_shape)
-            full_masks.append(full_mask)
-        full_masks = np.stack(full_masks, axis=-1) \
-            if full_masks else np.empty(original_image_shape[:2] + (0,))
-
-        return boxes, class_ids, scores, full_masks
-
-    def unmold_keypoint_detections(self, detections, mrcnn_keypoints, image_shape, window, mrcnn_mask,
-                                   keypoint_threshold=0.05):
-        """Reformats the detections of one image from the format of the neural
-        network output to a format suitable for use in the rest of the
-        application.
-
-        detections: [N, (y1, x1, y2, x2, class_id, score)]
-        mrcnn_keypoints: [N, num_keypoints, height*width]
-        image_shape: [height, width, depth] Original size of the image before resizing
-        window: [y1, x1, y2, x2] Box in the image where the real image is
-                excluding the padding.
-
-        Returns:
-        boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
-        class_ids: [N] Integer class IDs for each bounding box
-        scores: [N] Float probability scores of the class_id
-        masks: [height, width, N] Instance masks
-        keypoints:[N, num_keypoints]
-        """
-        # How many detections do we have?
-        # Detections array is padded with zeros. Find the first class_id == 0.
-        zero_ix = np.where(detections[:, 4] == 0)[0]
-        N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
-
-        # Extract boxes, class_ids, scores, and class-specific masks
-        boxes = detections[:N, :4]
-        class_ids = detections[:N, 4].astype(np.int32)
-        scores = detections[:N, 5]
-        masks = mrcnn_mask[np.arange(N), :, :, class_ids]
-        mrcnn_keypoints = mrcnn_keypoints[:N, :, :]
-
-        # Compute scale and shift to translate coordinates to image domain.
-        h_scale = image_shape[0] / (window[2] - window[0])
-        w_scale = image_shape[1] / (window[3] - window[1])
-        scale = min(h_scale, w_scale)
-        shift = window[:2]  # y, x
-        scales = np.array([scale, scale, scale, scale])
-        shifts = np.array([shift[0], shift[1], shift[0], shift[1]])
-
-        # Translate bounding boxes to image domain
-        boxes = np.multiply(boxes - shifts, scales).astype(np.int32)
-        # print("boxes:",boxes)
-        # print("shifts:",shift)
-        # print("scales:",scales)
-
-        # Filter out detections with zero area. Often only happens in early
-        # stages of training when the network weights are still a bit random.
-        exclude_ix = np.where(
-            (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
-        if exclude_ix.shape[0] > 0:
-            boxes = np.delete(boxes, exclude_ix, axis=0)
-            class_ids = np.delete(class_ids, exclude_ix, axis=0)
-            scores = np.delete(scores, exclude_ix, axis=0)
-            mrcnn_keypoints = np.delete(mrcnn_keypoints, exclude_ix, axis=0)
-            masks = np.delete(masks, exclude_ix, axis=0)
-            N = class_ids.shape[0]
-
-        # Resize masks to original image size and set boundary threshold.
-
-        keypoints = []
-        full_masks = []
-        for i in range(N):
-            # Convert neural network mask to full size mask
-            keypoint, full_mask = utils.unmold_keypoint_mask(mrcnn_keypoints[i], boxes[i], image_shape, masks[i],
-                                                             keypoint_threshold=keypoint_threshold)
-
-            keypoints.append(keypoint)
-            full_masks.append(full_mask)
-
-        keypoints = np.stack(keypoints, axis=0) if keypoints else np.empty((0,) + (mrcnn_keypoints.shape[1], 3))
-        full_masks = np.stack(full_masks, axis=-1) \
-            if full_masks else np.empty((0,) + masks.shape[1:3])
-
-        return boxes, class_ids, scores, keypoints, full_masks
-
     def detect(self, images, verbose=0):
         """Runs the detection pipeline.
 
@@ -861,9 +636,9 @@ class MaskRCNN():
         results = []
         for i, image in enumerate(images):
             final_rois, final_class_ids, final_scores, final_masks = \
-                self.unmold_detections(detections[i], mrcnn_mask[i],
-                                       image.shape, molded_images[i].shape,
-                                       windows[i])
+                utils.unmold_detections(detections[i], mrcnn_mask[i],
+                                        image.shape, molded_images[i].shape,
+                                        windows[i])
             results.append({
                 "rois": final_rois,
                 "class_ids": final_class_ids,
@@ -881,11 +656,11 @@ class MaskRCNN():
         rois: [batch, N, (y1, x1, y2, x2)] detection bounding boxes
         class_ids: [batch, N] int class IDs
         scores: [batch, N] float probability scores for the class IDs
+        masks: [H, W, N] instance binary masks
         keypoints: [batch, N, num_keypoints, 3] (x, y, v), keypoint x, y coordinate and valid
         """
         assert self.mode == "inference", "Create model in inference mode."
-        assert len(
-            images) == self.config.BATCH_SIZE, "len(images) must be equal to BATCH_SIZE"
+        assert len(images) == self.config.BATCH_SIZE, "len(images) must be equal to BATCH_SIZE"
 
         if verbose:
             log("Processing {} images".format(len(images)))
@@ -912,9 +687,11 @@ class MaskRCNN():
             log("molded_images", molded_images)
             log("image_metas", image_metas)
             log("windows", windows)
+            log("anchors", anchors)
+
         # Run human pose detection
         detections, mrcnn_class, mrcnn_bbox, rois, rpn_class, rpn_bbox, mrcnn_mask, \
-        mrcnn_keypoint_prob = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+        mrcnn_keypoint = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
 
         if verbose:
             log("------ Predictions ----------")
@@ -925,21 +702,20 @@ class MaskRCNN():
             log("rpn_class", rpn_class)
             log("rpn_bbox", rpn_bbox)
             log("mrcnn_mask", mrcnn_mask)
-            log("mrcnn_keypoint_prob", mrcnn_keypoint_prob)
+            log("mrcnn_keypoint_prob", mrcnn_keypoint)
 
         # Process detections
         results = []
         for i, image in enumerate(images):
-            final_rois, final_class_ids, final_scores, final_keypoints, final_masks = \
-                self.unmold_keypoint_detections(detections[i], mrcnn_keypoint_prob[i],
-                                                image.shape, windows[i], mrcnn_mask[i],
-                                                keypoint_threshold=self.config.KEYPOINT_THRESHOLD)
+            final_rois, final_class_ids, final_scores, final_masks, final_keypoints = \
+                utils.unmold_keypoint_detections(self.config, image.shape, molded_images[i].shape, detections[i],
+                                                 windows[i], mrcnn_mask[i], mrcnn_keypoint[i])
             results.append({
                 "rois": final_rois,
                 "class_ids": final_class_ids,
                 "scores": final_scores,
-                "keypoints": final_keypoints,
-                "masks": final_masks
+                "masks": final_masks,
+                "keypoints": final_keypoints
             })
         return results
 
@@ -990,9 +766,9 @@ class MaskRCNN():
         for i, image in enumerate(molded_images):
             window = [0, 0, image.shape[0], image.shape[1]]
             final_rois, final_class_ids, final_scores, final_masks = \
-                self.unmold_detections(detections[i], mrcnn_mask[i],
-                                       image.shape, molded_images[i].shape,
-                                       window)
+                utils.unmold_detections(detections[i], mrcnn_mask[i],
+                                        image.shape, molded_images[i].shape,
+                                        window)
             results.append({
                 "rois": final_rois,
                 "class_ids": final_class_ids,

@@ -56,10 +56,14 @@ DATA_DIR = os.path.abspath("/data/hdd/")
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn.config import Config
-from mrcnn import model as modellib, utils
+from mrcnn import model as modellib
+from mrcnn import utils
+from mrcnn import dataset
+from mrcnn.load_weights import load_weights
 
 # Local path to trained weights file
 COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_rcnn_coco_0160.h5")
+# COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "coco20190111T1814", "mask_rcnn_coco_0028.h5")
 
 # path to MSCOCO dataset
 COCO_DIR = os.path.join(DATA_DIR, "Datasets", "MSCOCO_2017")  # TODO: enter value here
@@ -132,7 +136,7 @@ class CocoConfig(Config):
 #  Dataset
 ############################################################
 
-class CocoDataset(utils.Dataset):
+class CocoDataset(dataset.Dataset):
 
     @property
     def skeleton(self):
@@ -142,7 +146,7 @@ class CocoDataset(utils.Dataset):
     def keypoint_names(self):
         return self._keypoint_names
 
-    def __init__(self, task_type="instances", class_map=None):
+    def __init__(self, task_type="instances"):
         assert task_type in ["instances", "person_keypoints"]
         self.task_type = task_type
         # the connection between 2 close keypoints
@@ -152,17 +156,15 @@ class CocoDataset(utils.Dataset):
         # "right_shoulder","left_elbow","right_elbow","left_wrist","right_wrist",
         # "left_hip","right_hip","left_knee","right_knee","left_ankle","right_ankle"]
         self._keypoint_names = []
-        super().__init__(class_map)
+        super().__init__()
 
     def load_coco(self, dataset_dir, subset, year=DEFAULT_DATASET_YEAR, class_ids=None,
-                  class_map=None, return_coco=False, auto_download=False):
+                  return_coco=False, auto_download=False):
         """Load a subset of the COCO dataset.
         dataset_dir: The root directory of the COCO dataset.
         subset: What to load (train, val, minival, valminusminival)
         year: What dataset year to load (2014, 2017) as a string, not an integer
         class_ids: If provided, only loads images that have the given classes.
-        class_map: TODO: Not implemented yet. Supports maping classes from
-            different datasets to the same class ID.
         return_coco: If True, returns the COCO object.
         auto_download: Automatically download and unzip MS-COCO images and annotations
         """
@@ -294,7 +296,7 @@ class CocoDataset(utils.Dataset):
             print("... done unzipping")
         print("Will use annotations in " + annFile)
 
-    def load_keypoints(self, image_id):
+    def load_keypoints_mask(self, image_id):
         """Load person keypoints for the given image.
 
         Returns:
@@ -317,12 +319,13 @@ class CocoDataset(utils.Dataset):
         for annotation in annotations:
             class_id = self.map_source_class_id(
                 "coco.{}".format(annotation['category_id']))
+            # only class person for keypoints
             assert class_id == 1
-            if class_id:
 
+            if class_id:
                 # load masks
-                m = self.annToMask(annotation, image_info["height"],
-                                   image_info["width"])
+                m = self.ann_to_mask(annotation, image_info["height"],
+                                     image_info["width"])
                 # Some objects are so small that they're less than 1 pixel area
                 # and end up rounded out. Skip those objects.
                 if m.max() < 1:
@@ -351,7 +354,7 @@ class CocoDataset(utils.Dataset):
             return keypoints, masks, class_ids
         else:
             # Call super class to return an empty mask
-            return super(CocoDataset, self).load_keypoints(image_id)
+            return super(CocoDataset, self).load_keypoints_mask(image_id)
 
     def load_mask(self, image_id):
         """Load instance masks for the given image.
@@ -379,8 +382,8 @@ class CocoDataset(utils.Dataset):
             class_id = self.map_source_class_id(
                 "coco.{}".format(annotation['category_id']))
             if class_id:
-                m = self.annToMask(annotation, image_info["height"],
-                                   image_info["width"])
+                m = self.ann_to_mask(annotation, image_info["height"],
+                                     image_info["width"])
                 # Some objects are so small that they're less than 1 pixel area
                 # and end up rounded out. Skip those objects.
                 if m.max() < 1:
@@ -415,7 +418,7 @@ class CocoDataset(utils.Dataset):
 
     # The following two functions are from pycocotools with a few changes.
 
-    def annToRLE(self, ann, height, width):
+    def ann_to_rle(self, ann, height, width):
         """
         Convert annotation which can be polygons, uncompressed RLE to RLE.
         :return: binary mask (numpy 2D array)
@@ -434,12 +437,12 @@ class CocoDataset(utils.Dataset):
             rle = ann['segmentation']
         return rle
 
-    def annToMask(self, ann, height, width):
+    def ann_to_mask(self, ann, height, width):
         """
         Convert annotation which can be polygons, uncompressed RLE, or RLE to binary mask.
         :return: binary mask (numpy 2D array)
         """
-        rle = self.annToRLE(ann, height, width)
+        rle = self.ann_to_rle(ann, height, width)
         m = maskUtils.decode(rle)
         return m
 
@@ -501,7 +504,8 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
 
         # Run detection
         t = time.time()
-        r = model.detect([image], verbose=0)[0]
+        r = model.detect_keypoint([image], verbose=0)[0]
+        # r = model.detect([image], verbose=0)[0]
         t_prediction += (time.time() - t)
 
         # Convert results to COCO format
@@ -550,7 +554,7 @@ if __name__ == '__main__':
                         metavar="<year>",
                         help='Year of the MS-COCO dataset (2014 or 2017) (default=2017)')
     parser.add_argument('--model', required=False,
-                        default="coco",
+                        default=COCO_MODEL_PATH,
                         metavar="/path/to/weights.h5",
                         help="Path to weights .h5 file or 'coco', 'last', 'imagenet' (default='coco'")
     parser.add_argument('--logs', required=False,
@@ -614,23 +618,15 @@ if __name__ == '__main__':
 
     # Select weights file to load
     if args.model.lower() == "coco":
-        model_path = COCO_MODEL_PATH
+        model_path = args.model
     elif args.model.lower() == "last":
         # Find last trained weights
-        model_path = model.find_last()
+        model_path = utils.find_last(config, args.model)
     elif args.model.lower() == "imagenet":
         # Start from ImageNet trained weights
-        model_path = model.get_imagenet_weights()
+        model_path = utils.get_imagenet_weights()
     else:
         model_path = args.model
-
-    # # Load weights
-    # print("Loading weights ", model_path)
-    # if args.model.lower() == "coco":
-    #     model.load_weights(model_path, by_name=True, exclude = ["mrcnn_class_logits", "mrcnn_bbox_fc",
-    #                "mrcnn_bbox", "mrcnn_mask"])
-    # else:
-    #     model.load_weights(model_path, by_name=True)
 
     # Train or evaluate
     if args.command == "train":
@@ -667,7 +663,7 @@ if __name__ == '__main__':
         # Right/Left flip 50% of the time
         augmentation = imgaug.augmenters.Fliplr(0.5)
 
-        # *** training phase schedule ***
+        # training phase schedule
         lr_values = [config.LEARNING_RATE,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
@@ -681,7 +677,7 @@ if __name__ == '__main__':
         last_layers = None
         last_epoch = None
         if model_path is not None and args.continue_training:
-            last_epoch, _ = model.get_epoch_and_date_from_model_path(model_path=model_path)
+            last_epoch, _ = utils.get_epoch_and_date_from_model_path(model_path=model_path)
         weights_loaded = False
         can_load_optimizer_weights = args.continue_training
 
@@ -704,9 +700,9 @@ if __name__ == '__main__':
             if not weights_loaded and model_path is not None:
                 # Load weights
                 print("Loading weights from: ", model_path)
-                model.load_weights(model_path, by_name=True,
-                                   exclude=["mrcnn_class_logits", "mrcnn_bbox_fc", "mrcnn_bbox", "mrcnn_mask"],
-                                   include_optimizer=can_load_optimizer_weights)
+                load_weights(model, model_path, by_name=True,
+                             exclude=["mrcnn_class_logits", "mrcnn_bbox_fc", "mrcnn_bbox", "mrcnn_mask"],
+                             include_optimizer=can_load_optimizer_weights)
                 weights_loaded = True
 
             print("Training: {}".format(layers))

@@ -90,6 +90,39 @@ def save_all_weights(model, filepath, layers=None,
                             param_dset[:] = val
 
 
+def load_weights(model, filepath, by_name=False, exclude=None, include_optimizer=True):
+    """Modified version of the corresponding Keras function with
+    the addition of multi-GPU support and the ability to exclude
+    some layers from loading.
+    exclude: list of layer names to exclude
+    include_optimizer: Load optimzer weights as well. Model has to be compiled beforehand.
+    """
+
+    if exclude:
+        by_name = True
+
+    # In multi-GPU training, we wrap the model. Get layers
+    # of the inner model because they have the weights.
+    keras_model = model.keras_model
+    layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model") \
+        else keras_model.layers
+
+    if include_optimizer:
+        # Necessary to initialize the weight variables of the optimizer
+        keras_model._make_train_function()
+        assert keras_model.optimizer, "Model needs to be compiled with an optimizer to load optimizer weights"
+
+    # Exclude some layers
+    if exclude:
+        layers = filter(lambda l: l.name not in exclude, layers)
+
+    load_all_weights(keras_model, filepath, layers=layers, by_name=by_name,
+                     include_optimizer=include_optimizer)
+
+    # Update the log directory
+    model.set_log_dir(filepath)
+
+
 def load_all_weights(model, filepath, layers=None, by_name=False,
                      include_optimizer=True):
     """Loads the weights of a model saved via `save_all_weights`.
@@ -108,35 +141,32 @@ def load_all_weights(model, filepath, layers=None, by_name=False,
         ValueError: In case of an invalid savefile.
     """
     import h5py
-    # Conditional import to support versions of Keras before 2.2
-    # TODO: remove in about 6 months (end of 2018)
-    try:
-        from keras.engine import saving
-    except ImportError:
-        # Keras before 2.2 used the 'topology' namespace.
-        from keras.engine import topology as saving
-    if h5py is None:
-        raise ImportError('`load_all_weights` requires h5py.')
+    from keras.engine import saving
 
-    with h5py.File(filepath, mode='r') as f:
-        # set weights
-        if 'layer_names' not in f.attrs and 'model_weights' in f:
-            model_f = f['model_weights']
+    with h5py.File(filepath, mode='r') as loaded_weights:
+        # set loaded weights
+        if 'layer_names' not in loaded_weights.attrs and 'model_weights' in loaded_weights:
+            model_f = loaded_weights['model_weights']
         else:
-            model_f = f
-        if layers is not None:
-            model_layers = layers
-        else:
+            model_f = loaded_weights
+
+        # only loading specified layers if available
+        if layers is None:
             model_layers = model.layers
+        else:
+            model_layers = layers
+
+        # load weight by layer name if set to true
         if by_name:
             saving.load_weights_from_hdf5_group_by_name(model_f, model_layers)
         else:
             saving.load_weights_from_hdf5_group(model_f, model_layers)
-        # Set optimizer weights.
+
+        # set optimizer weights.
         if include_optimizer:
-            if 'optimizer_weights' in f and hasattr(model, 'optimizer') and model.optimizer:
+            if 'optimizer_weights' in loaded_weights and hasattr(model, 'optimizer') and model.optimizer:
                 log("Loading optimizer weights as well")
-                optimizer_weights_group = f['optimizer_weights']
+                optimizer_weights_group = loaded_weights['optimizer_weights']
                 optimizer_weight_names = [n.decode('utf8') for n in
                                           optimizer_weights_group.attrs['weight_names']]
                 optimizer_weight_values = [optimizer_weights_group[n] for n in

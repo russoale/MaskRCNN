@@ -124,7 +124,7 @@ class DetectionLayer(KE.Layer):
         super(DetectionLayer, self).__init__(**kwargs)
         self.config = config
 
-    def call(self, inputs):
+    def call(self, inputs, **kwargs):
         rois = inputs[0]
         mrcnn_class = inputs[1]
         mrcnn_bbox = inputs[2]
