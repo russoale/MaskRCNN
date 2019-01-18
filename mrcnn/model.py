@@ -255,10 +255,11 @@ class MaskRCNN():
                 [target_bbox, target_class_ids, mrcnn_bbox])
             mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
                 [target_mask, target_class_ids, mrcnn_mask])
-            keypoint_loss = KL.Lambda(lambda x: mrcnn_keypoint_loss_graph(*x, weight_loss=config.KEYPOINT_LOSS_WEIGHTING,
-                                                                          mask_shape=config.KEYPOINT_MASK_SHAPE,
-                                                                          number_point=config.NUM_KEYPOINTS),
-                                      name="mrcnn_keypoint_loss")(
+            keypoint_loss = KL.Lambda(
+                lambda x: mrcnn_keypoint_loss_graph(*x, weight_loss=config.KEYPOINT_LOSS_WEIGHTING,
+                                                    mask_shape=config.KEYPOINT_MASK_SHAPE,
+                                                    number_point=config.NUM_KEYPOINTS),
+                name="mrcnn_keypoint_loss")(
                 [target_keypoint, target_keypoint_weight, target_class_ids, keypoint_mrcnn_mask])
 
             # Model
@@ -299,7 +300,7 @@ class MaskRCNN():
                                                       train_bn=config.TRAIN_BN)
 
             keypoint_mcrcnn_prob = KL.Activation("softmax", name="mrcnn_prob")(keypoint_mrcnn)
-            model = KM.Model([input_image, input_image_meta],
+            model = KM.Model([input_image, input_image_meta, input_anchors],
                              [detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask,
                               keypoint_mcrcnn_prob],
                              name='mask_keypoint_mrcnn')
@@ -853,8 +854,9 @@ class MaskRCNN():
             log("image_metas", image_metas)
             log("anchors", anchors)
         # Run object detection
-        detections, _, _, mrcnn_mask, _, _, _ = \
-            self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+        detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask, \
+        keypoint_mcrcnn_prob = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+
         # Process detections
         results = []
         for i, image in enumerate(images):
@@ -889,30 +891,42 @@ class MaskRCNN():
             log("Processing {} images".format(len(images)))
             for image in images:
                 log("image", image)
+
         # Mold inputs to format expected by the neural network
         molded_images, image_metas, windows = self.mold_inputs(images)
+
+        # Validate image sizes
+        # All images in a batch MUST be of the same size
+        image_shape = molded_images[0].shape
+        for g in molded_images[1:]:
+            assert g.shape == image_shape, \
+                "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
+
+        # Anchors
+        anchors = self.get_anchors(image_shape)
+        # Duplicate across the batch dimension because Keras requires it
+        # TODO: can this be optimized to avoid duplicating the anchors?
+        anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
+
         if verbose:
             log("molded_images", molded_images)
             log("image_metas", image_metas)
             log("windows", windows)
         # Run human pose detection
-        # [detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask, keypoint_mcrcnn_prob]
-        detections, mrcnn_class, mrcnn_bbox, \
-        rois, rpn_class, rpn_bbox, mrcnn_mask, mrcnn_keypoint_prob = \
-            self.keras_model.predict([molded_images, image_metas], verbose=0)
-        if verbose:
-            log("rpn_class", rpn_class)
-            log("rpn_bbox", rpn_bbox)
+        detections, mrcnn_class, mrcnn_bbox, rois, rpn_class, rpn_bbox, mrcnn_mask, \
+        mrcnn_keypoint_prob = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
 
-            # 1000
-            log("rois", rois)
+        if verbose:
+            log("------ Predictions ----------")
+            log("detections", detections)
             log("mrcnn_class", mrcnn_class)
             log("mrcnn_bbox", mrcnn_bbox)
-
-            # 100
-            log("detections", detections)
+            log("rois", rois)
+            log("rpn_class", rpn_class)
+            log("rpn_bbox", rpn_bbox)
             log("mrcnn_mask", mrcnn_mask)
             log("mrcnn_keypoint_prob", mrcnn_keypoint_prob)
+
         # Process detections
         results = []
         for i, image in enumerate(images):

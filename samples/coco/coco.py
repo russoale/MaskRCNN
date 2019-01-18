@@ -536,8 +536,8 @@ if __name__ == '__main__':
     import argparse
 
     # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        description='Train Mask R-CNN on MS COCO.')
+    parser = argparse.ArgumentParser(description='Train Mask R-CNN on MS COCO.')
+
     parser.add_argument("command",
                         metavar="<command>",
                         help="'train' or 'evaluate' on MS COCO")
@@ -586,6 +586,7 @@ if __name__ == '__main__':
     print("Auto Download: ", args.download)
     print("Keypoint: ", args.keypoint)
     print("Continue Training: ", args.continue_training)
+    print("Limit: ", args.limit)
 
     # Configurations
     if args.command == "train":
@@ -597,6 +598,7 @@ if __name__ == '__main__':
             GPU_COUNT = 1
             IMAGES_PER_GPU = 1
             DETECTION_MIN_CONFIDENCE = 0
+
 
         config = InferenceConfig()
 
@@ -711,7 +713,6 @@ if __name__ == '__main__':
             model.train(dataset_train, dataset_val, learning_rate=lr, epochs=epochs, augmentation=augmentation)
 
             last_layers = layers
-
 
     elif args.command == "evaluate":
         # Validation dataset
