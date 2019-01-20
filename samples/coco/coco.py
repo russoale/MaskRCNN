@@ -92,7 +92,7 @@ class CocoConfig(Config):
     IMAGES_PER_GPU = 2
 
     # Uncomment to train on 8 GPUs (default is 1)
-    GPU_COUNT = 2
+    GPU_COUNT = 4
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 1  # Person and background
@@ -119,7 +119,7 @@ class CocoConfig(Config):
 
     LEARNING_RATE = 0.001
 
-    STEPS_PER_EPOCH = 4000
+    STEPS_PER_EPOCH = 1000
 
     KEYPOINT_LOSS_WEIGHTING = True
 
@@ -667,11 +667,11 @@ if __name__ == '__main__':
         lr_values = [config.LEARNING_RATE,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
-        epochs_values = [10,
+        epochs_values = [20,
                          120,
                          160]
         trainable_layers = ["heads",
-                            "all",
+                            "4+",
                             "all"]
 
         last_layers = None
