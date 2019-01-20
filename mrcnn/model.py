@@ -707,11 +707,11 @@ class MaskRCNN:
         # Process detections
         results = []
         for i, image in enumerate(images):
-            final_rois, final_class_ids, final_scores, final_masks, final_keypoints = \
+            final_bboxes, final_class_ids, final_scores, final_masks, final_keypoints = \
                 utils.unmold_keypoint_detections(self.config, image.shape, molded_images[i].shape, detections[i],
                                                  windows[i], mrcnn_mask[i], mrcnn_keypoint[i])
             results.append({
-                "rois": final_rois,
+                "bboxes": final_bboxes,
                 "class_ids": final_class_ids,
                 "scores": final_scores,
                 "masks": final_masks,

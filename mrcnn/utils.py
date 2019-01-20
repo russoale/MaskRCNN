@@ -878,17 +878,17 @@ def unmold_keypoint_detections(config, original_image_shape, image_shape, detect
     full_keypoints = []
     for i in range(N):
         # Convert neural network mask to full size mask
-        full_keypoint, full_mask = unmold_keypoint_mask(masks[i], boxes[i], keypoints[i],
-                                                         original_image_shape,
-                                                         keypoint_mask_shape=config.KEYPOINT_MASK_SHAPE,
-                                                         keypoint_threshold=config.KEYPOINT_THRESHOLD)
-        full_masks.append(full_mask)
-        full_keypoints.append(full_keypoint)
+        detected_kp, detected_mask = unmold_keypoint_mask(masks[i], boxes[i], keypoints[i],
+                                                          original_image_shape,
+                                                          keypoint_mask_shape=config.KEYPOINT_MASK_SHAPE,
+                                                          keypoint_threshold=config.KEYPOINT_THRESHOLD)
+        full_masks.append(detected_mask)
+        full_keypoints.append(detected_kp)
 
     full_keypoints = np.stack(full_keypoints, axis=0) \
         if full_keypoints else np.empty((0,) + (keypoints.shape[1], 3))
     full_masks = np.stack(full_masks, axis=-1) \
-        if full_masks else np.empty((0,) + masks.shape[1:3])
+        if full_masks else np.empty(original_image_shape[:2] + (0,))
 
     return boxes, class_ids, scores, full_masks, full_keypoints
 
