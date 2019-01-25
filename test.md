@@ -1,3 +1,6 @@
 - data generator, image_ids während training [x]
 - trainiertes model, visualisirung auf test und val bilder, maske keypoint box 
 - teile des modells, input für keypoint head, regionen, keypoint_gt (original repo mit notebook für teiltraining)
+
+
+- official evaluate coco: object detection, keypoints on full val set 
