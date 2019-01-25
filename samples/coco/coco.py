@@ -451,7 +451,7 @@ class CocoDataset(dataset.Dataset):
 #  COCO Evaluation
 ############################################################
 
-def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks):
+def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks, keypoints):
     """Arrange resutls to match COCO specs in http://cocodataset.org/#format
     """
     # If no results, return an empty list
@@ -466,13 +466,15 @@ def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks):
             score = scores[i]
             bbox = np.around(rois[i], 1)
             mask = masks[:, :, i]
+            keypoint = keypoints[i, :, :].ravel()
 
             result = {
                 "image_id": image_id,
                 "category_id": dataset.get_source_class_id(class_id, "coco"),
                 "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
                 "score": score,
-                "segmentation": maskUtils.encode(np.asfortranarray(mask))
+                "segmentation": maskUtils.encode(np.asfortranarray(mask)),
+                "keypoints": keypoint
             }
             results.append(result)
     return results
@@ -481,7 +483,7 @@ def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks):
 def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=None):
     """Runs official COCO evaluation.
     dataset: A Dataset object with valiadtion data
-    eval_type: "bbox" or "segm" for bounding box or segmentation evaluation
+    eval_type: 'segm', 'bbox', 'keypoints' for evaluation
     limit: if not 0, it's the number of images to use for evaluation
     """
     # Pick COCO images from the dataset
@@ -498,7 +500,12 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
     t_start = time.time()
 
     results = []
+    total_image_count = len(image_ids)
     for i, image_id in enumerate(image_ids):
+        # print progress
+        progress = int(100 * (i / total_image_count))
+        print('\r[{0}] {1}%'.format('#' * progress, progress))
+
         # Load image
         image = dataset.load_image(image_id)
 
@@ -510,10 +517,13 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
 
         # Convert results to COCO format
         # Cast masks to uint8 because COCO tools errors out on bool
-        image_results = build_coco_results(dataset, coco_image_ids[i:i + 1],
-                                           r["rois"], r["class_ids"],
+        image_results = build_coco_results(dataset,
+                                           coco_image_ids[i:i + 1],
+                                           r["bboxes"],
+                                           r["class_ids"],
                                            r["scores"],
-                                           r["masks"].astype(np.uint8))
+                                           r["masks"].astype(np.uint8),
+                                           r["keypoints"])
         results.extend(image_results)
 
     # Load results. This modifies results with additional attributes.
@@ -580,6 +590,10 @@ if __name__ == '__main__':
                         metavar="<True|False>",
                         help="Try to continue a previously started training, \
                                 mainly by trying to recreate the optimizer state and epoch number.")
+    parser.add_argument('--eval_type', required=False,
+                        default="bbox",
+                        metavar="<'segm'|'bbox'|'keypoints'>",
+                        help="Set the type of official coco evaluation")
 
     args = parser.parse_args()
     print("Command: ", args.command)
@@ -591,49 +605,29 @@ if __name__ == '__main__':
     print("Keypoint: ", args.keypoint)
     print("Continue Training: ", args.continue_training)
     print("Limit: ", args.limit)
-
-    # Configurations
-    if args.command == "train":
-        config = CocoConfig()
-    else:
-        class InferenceConfig(CocoConfig):
-            # Set batch size to 1 since we'll be running inference on
-            # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
-            GPU_COUNT = 1
-            IMAGES_PER_GPU = 1
-            DETECTION_MIN_CONFIDENCE = 0
-
-
-        config = InferenceConfig()
-
-    config.display()
-
-    # Create model
-    if args.command == "train":
-        model = modellib.MaskRCNN(mode="training", config=config,
-                                  model_dir=args.logs)
-    else:
-        model = modellib.MaskRCNN(mode="inference", config=config,
-                                  model_dir=args.logs)
+    print("Eval Type: ", args.eval_type)
 
     # Select weights file to load
     if args.model.lower() == "coco":
         model_path = args.model
-    elif args.model.lower() == "last":
-        # Find last trained weights
-        model_path = utils.find_last(config, args.model)
     elif args.model.lower() == "imagenet":
         # Start from ImageNet trained weights
         model_path = utils.get_imagenet_weights()
     else:
         model_path = args.model
 
+    # select task type
+    if args.keypoint:
+        task_type = "person_keypoints"
+    else:
+        task_type = "instances"
+
     # Train or evaluate
     if args.command == "train":
-        if args.keypoint:
-            task_type = "person_keypoints"
-        else:
-            task_type = "instances"
+        config = CocoConfig()
+        config.display()
+        model = modellib.MaskRCNN(mode="training", config=config, model_dir=args.logs)
+
         # Training dataset. Use the training set and 35K from the
         # validation set, as as in the Mask RCNN paper.
         dataset_train = CocoDataset(task_type=task_type)
@@ -711,14 +705,35 @@ if __name__ == '__main__':
             last_layers = layers
 
     elif args.command == "evaluate":
+        class InferenceConfig(CocoConfig):
+            # Set batch size to 1 since we'll be running inference on
+            # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
+            GPU_COUNT = 1
+            IMAGES_PER_GPU = 1
+            DETECTION_MIN_CONFIDENCE = 0
+
+
+        config = InferenceConfig()
+        config.display()
+
         # Validation dataset
-        dataset_val = CocoDataset()
+        dataset_val = CocoDataset(task_type=task_type)
         val_type = "val" if args.year in '2017' else "minival"
-        coco = dataset_val.load_coco(args.dataset, val_type, year=args.year, return_coco=True,
+        coco = dataset_val.load_coco(args.dataset, val_type, year=args.year, class_ids=[1], return_coco=True,
                                      auto_download=args.download)
         dataset_val.prepare()
-        print("Running COCO evaluation on {} images.".format(args.limit))
-        evaluate_coco(model, dataset_val, coco, "bbox", limit=int(args.limit))
+        print("Running COCO evaluation on {} images.".format(args.limit if args.limit != 0 else "all"))
+
+        # Create model in inference mode
+        model = modellib.MaskRCNN(mode="inference", config=config, model_dir=args.logs)
+
+        # Load weights
+        print("Loading weights from ", model_path)
+        load_weights(model, model_path, by_name=True, include_optimizer=False)
+
+        print("Start evaluation..")
+        evaluate_coco(model, dataset_val, coco, args.eval_type, limit=int(args.limit))
+
     else:
         print("'{}' is not recognized. "
               "Use 'train' or 'evaluate'".format(args.command))
