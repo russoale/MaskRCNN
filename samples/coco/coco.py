@@ -466,7 +466,7 @@ def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks, keypo
             score = scores[i]
             bbox = np.around(rois[i], 1)
             mask = masks[:, :, i]
-            keypoint = keypoints[i, :, :].ravel()
+            keypoint = keypoints[i, :, :].flatten().tolist()
 
             result = {
                 "image_id": image_id,
@@ -501,10 +501,14 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
 
     results = []
     total_image_count = len(image_ids)
+    next_prgress = 0
     for i, image_id in enumerate(image_ids):
         # print progress
         progress = int(100 * (i / total_image_count))
-        print('\r[{0}] {1}%'.format('#' * progress, progress))
+        if next_prgress != progress:
+            next_prgress = progress
+            print('\r[{0}{1}] {2}%'.format('#' * progress, " " * (100-progress), progress), end=' ', flush=True)
+
 
         # Load image
         image = dataset.load_image(image_id)

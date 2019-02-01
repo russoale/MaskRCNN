@@ -57,3 +57,7 @@ pip-delete-this-directory.txt
 .venv
 venv/
 ENV/
+
+# mscoco
+samples/coco/annotations
+samples/coco/val2017
