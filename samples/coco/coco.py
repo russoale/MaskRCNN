@@ -659,17 +659,17 @@ if __name__ == '__main__':
 
         # Image Augmentation
         # Right/Left flip 50% of the time
-        augmentation = imgaug.augmenters.Fliplr(0.5)
+        # augmentation = imgaug.augmenters.Fliplr(0.5)
 
         # training phase schedule
         lr_values = [config.LEARNING_RATE,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
-        epochs_values = [20,
-                         120,
+        epochs_values = [10,
+                         80,
                          160]
         trainable_layers = ["heads",
-                            "4+",
+                            "all",
                             "all"]
 
         last_layers = None
