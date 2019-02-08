@@ -669,7 +669,7 @@ if __name__ == '__main__':
                          120,
                          160]
         trainable_layers = ["heads",
-                            "4+",
+                            "all",
                             "all"]
 
         last_layers = None
