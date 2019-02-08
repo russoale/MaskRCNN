@@ -119,7 +119,7 @@ class CocoConfig(Config):
 
     LEARNING_RATE = 0.001
 
-    STEPS_PER_EPOCH = 1000
+    STEPS_PER_EPOCH = 4000
 
     KEYPOINT_LOSS_WEIGHTING = True
 
@@ -659,13 +659,13 @@ if __name__ == '__main__':
 
         # Image Augmentation
         # Right/Left flip 50% of the time
-        augmentation = imgaug.augmenters.Fliplr(0.5)
+        #augmentation = imgaug.augmenters.Fliplr(0.5)
 
         # training phase schedule
         lr_values = [config.LEARNING_RATE,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
-        epochs_values = [20,
+        epochs_values = [10,
                          120,
                          160]
         trainable_layers = ["heads",
@@ -704,7 +704,7 @@ if __name__ == '__main__':
                 weights_loaded = True
 
             print("Training: {}".format(layers))
-            model.train(dataset_train, dataset_val, learning_rate=lr, epochs=epochs, augmentation=augmentation)
+            model.train(dataset_train, dataset_val, learning_rate=lr, epochs=epochs)
 
             last_layers = layers
 
