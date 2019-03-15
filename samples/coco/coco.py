@@ -27,12 +27,15 @@ Usage: import the module (see Jupyter notebooks for examples), or run from
     python3 coco.py evaluate --dataset=/path/to/coco/ --model=last
 """
 
-import os
 import sys
 import time
-import numpy as np
-import imgaug  # https://github.com/aleju/imgaug (pip3 install imgaug)
+import urllib.request
+import zipfile
 
+import numpy as np
+import os
+import shutil
+from pycocotools import mask as maskUtils
 # Download and install the Python COCO tools from https://github.com/waleedka/coco
 # That's a fork from the original https://github.com/pdollar/coco with a bug
 # fix for Python 3.
@@ -41,13 +44,10 @@ import imgaug  # https://github.com/aleju/imgaug (pip3 install imgaug)
 # Note: Edit PythonAPI/Makefile and replace "python" with "python3".
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
-from pycocotools import mask as maskUtils
-
-import zipfile
-import urllib.request
-import shutil
 
 # Root directory of the project
+from mrcnn.augmenter import FliplrKeypoint
+
 ROOT_DIR = os.path.abspath("../../")
 
 # Root directory to hdd
@@ -119,7 +119,7 @@ class CocoConfig(Config):
 
     LEARNING_RATE = 0.001
 
-    STEPS_PER_EPOCH = 1000
+    STEPS_PER_EPOCH = 2000
 
     KEYPOINT_LOSS_WEIGHTING = True
 
@@ -658,17 +658,17 @@ if __name__ == '__main__':
 
         # Image Augmentation
         # Right/Left flip 50% of the time
-        augmentation = imgaug.augmenters.Fliplr(0.5)
+        augmentation = FliplrKeypoint(0.5, config=config)
 
         # training phase schedule
         lr_values = [config.LEARNING_RATE,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
-        epochs_values = [20,
+        epochs_values = [40,
                          120,
                          160]
         trainable_layers = ["heads",
-                            "4+",
+                            "all",
                             "all"]
 
         last_layers = None
