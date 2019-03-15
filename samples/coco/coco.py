@@ -46,8 +46,6 @@ from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
 # Root directory of the project
-from mrcnn.augmenter import FliplrKeypoint
-
 ROOT_DIR = os.path.abspath("../../")
 
 # Root directory to hdd
@@ -60,6 +58,7 @@ from mrcnn import model as modellib
 from mrcnn import utils
 from mrcnn import dataset
 from mrcnn.load_weights import load_weights
+from mrcnn.augmenter import FliplrKeypoint
 
 # Local path to trained weights file
 COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_rcnn_coco_0160.h5")
