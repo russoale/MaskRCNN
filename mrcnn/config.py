@@ -215,6 +215,14 @@ class Config(object):
     #     True: (don't use). Set layer in training mode even when predicting
     TRAIN_BN = False  # Defaulting to False since batch size is often small
 
+    # Set trainable head networks for keypoint or mask specific task
+    #   None: training both mask and keypoint heads
+    #   mask: only set mask head active
+    #   keypoint: only set keypoint head active
+    TRAINING_HEADS = None
+
+    #BBOX_EXTRACTION_STRATEGY
+
     # Gradient norm clipping
     GRADIENT_CLIP_NORM = 5.0
 

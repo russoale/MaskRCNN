@@ -6,26 +6,27 @@ from mrcnn.detection_target_layer import overlaps_graph
 from mrcnn.misc_functions import trim_zeros_graph
 
 
-def detection_keypoint_targets_graph(proposals, gt_class_ids, gt_boxes, gt_keypoints, config):
+def detection_keypoint_mask_targets_graph(proposals, gt_class_ids, gt_boxes, gt_keypoints, gt_masks, config):
     """Generates detection targets for one image. Subsamples proposals and
     generates target class IDs, bounding box deltas, and masks for each.
 
     Inputs:
-        proposals: [N, (y1, x1, y2, x2)] in normalized coordinates. Might
-                   be zero padded if there are not enough proposals.
-        gt_class_ids: [MAX_GT_INSTANCES] int class IDs
-        gt_boxes: [MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized coordinates.
-        gt_keypoints: [MAX_GT_INSTANCES, NUM_KEYPOINTS, 3] of (x, y ,v)
-
+    proposals: [N, (y1, x1, y2, x2)] in normalized coordinates. Might
+               be zero padded if there are not enough proposals.
+    gt_class_ids: [MAX_GT_INSTANCES] int class IDs
+    gt_boxes: [MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized coordinates.
+    gt_keypoints: [MAX_GT_INSTANCES, NUM_KEYPOINTS, 3] of (x, y ,v)
+    gt_masks: [height, width, MAX_GT_INSTANCES] of boolean type.
     Returns: Target ROIs and corresponding class IDs, bounding box shifts, keypoint label, keypoint weight
-        rois: [TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)] in normalized coordinates
-        class_ids: [TRAIN_ROIS_PER_IMAGE]. Integer class IDs. Zero padded.
-        deltas: [TRAIN_ROIS_PER_IMAGE, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
-                Class-specific bbox refinements.
-        keypoints_labels: [TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS). Keypoint labels in [0, HEATMAP_SIZE-1]
-        HEATMAP_SIZE = HEAT_MAP_WITHD * HEAT_MAP_HEIGHT
+    and masks.
+    rois: [TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)] in normalized coordinates
+    class_ids: [TRAIN_ROIS_PER_IMAGE]. Integer class IDs. Zero padded.
+    deltas: [TRAIN_ROIS_PER_IMAGE, NUM_CLASSES, (dy, dx, log(dh), log(dw))]
+            Class-specific bbox refinements.
+    keypoints_labels: [TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS). Keypoint labels in [0, HEATMAP_SIZE-1]
+    HEATMAP_SIZE = HEAT_MAP_WITHD * HEAT_MAP_HEIGHT
 
-        keypoints_weights: [TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS), 0: not visible 1: visible
+    keypoints_weights: [TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS), 0: not visible 1: visible
 
     Note: Returned arrays might be zero padded if not enough target ROIs.
     """
@@ -45,6 +46,8 @@ def detection_keypoint_targets_graph(proposals, gt_class_ids, gt_boxes, gt_keypo
                                    name="trim_gt_class_ids")
     gt_keypoints = tf.gather(gt_keypoints, tf.where(non_zeros)[:, 0], axis=0,
                              name="trim_gt_keypoints")
+    gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=2,
+                         name="trim_gt_masks")
 
     # Handle COCO crowds
     # A crowd box in COCO is a bounding box around several instances. Exclude
@@ -53,10 +56,12 @@ def detection_keypoint_targets_graph(proposals, gt_class_ids, gt_boxes, gt_keypo
     non_crowd_ix = tf.where(gt_class_ids > 0)[:, 0]
     crowd_boxes = tf.gather(gt_boxes, crowd_ix)
     crowd_keypoints = tf.gather(gt_keypoints, crowd_ix)
+    crowd_masks = tf.gather(gt_masks, crowd_ix, axis=2)
     gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
     gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
 
     gt_keypoints = tf.gather(gt_keypoints, non_crowd_ix)
+    gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
     # Compute overlaps matrix [proposals, gt_boxes]
     overlaps = overlaps_graph(proposals, gt_boxes)
@@ -100,8 +105,32 @@ def detection_keypoint_targets_graph(proposals, gt_class_ids, gt_boxes, gt_keypo
 
     # Assign positive ROIs to GT masks
 
+    # Permute masks to [N, height, width, 1]
+    transposed_masks = tf.expand_dims(tf.transpose(gt_masks, [2, 0, 1]), -1)
     # Pick the right mask for each ROI
     roi_keypoints = tf.gather(gt_keypoints, roi_gt_box_assignment)
+    roi_masks = tf.gather(transposed_masks, roi_gt_box_assignment)
+    # Compute mask targets
+    boxes = positive_rois
+    y1, x1, y2, x2 = tf.split(positive_rois, 4, axis=1)
+    if config.USE_MINI_MASK:
+        # Transform ROI corrdinates from normalized image space
+        # to normalized mini-mask space.
+        gt_y1, gt_x1, gt_y2, gt_x2 = tf.split(roi_gt_boxes, 4, axis=1)
+        gt_h = gt_y2 - gt_y1
+        gt_w = gt_x2 - gt_x1
+        y1 = (y1 - gt_y1) / gt_h
+        x1 = (x1 - gt_x1) / gt_w
+        y2 = (y2 - gt_y1) / gt_h
+        x2 = (x2 - gt_x1) / gt_w
+        boxes = tf.concat([y1, x1, y2, x2], 1)
+    box_ids = tf.range(0, tf.shape(roi_masks)[0])
+    masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes,
+                                     box_ids,
+                                     config.MASK_SHAPE)
+    # Remove the extra dimension from masks.
+    masks = tf.squeeze(masks, axis=3)
+    masks = tf.round(masks)
 
     ## Transform ROI keypoints from (x,y) image space to keypoint label
     y1, x1, y2, x2 = tf.split(positive_rois, 4, axis=1)
@@ -163,44 +192,45 @@ def detection_keypoint_targets_graph(proposals, gt_class_ids, gt_boxes, gt_keypo
     keypoint_lables = tf.pad(keypoint_lables, [(0, N + P), (0, 0)])
     # keypoint_lables = tf.pad(keypoint_lables, [(0, N + P), (0, 0),(0,0)])
     keypoint_weights = tf.pad(keypoint_weights, [(0, N + P), (0, 0)])
+    masks = tf.pad(masks, [(0, N + P), (0, 0), (0, 0)])
 
-    return rois, roi_gt_class_ids, deltas, keypoint_lables, keypoint_weights
+    return rois, roi_gt_class_ids, deltas, keypoint_lables, keypoint_weights, masks
 
 
-class DetectionKeypointTargetLayer(KE.Layer):
+class DetectionKeypointMaskTargetLayer(KE.Layer):
     """Subsamples proposals and generates target box refinement, class_ids,keypoint_weights
     and keypoint_masks for each.
 
     Inputs:
-        proposals: [batch, N, (y1, x1, y2, x2)] in normalized coordinates. Might
-                   be zero padded if there are not enough proposals, Here N <= RPN_TRAIN_ANCHORS_PER_IMAGE(256)
-                   because of the NMS e.t.c
-        gt_class_ids: [batch, MAX_GT_INSTANCES] Integer class IDs.
-        gt_boxes: [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized
-                  coordinates.
-        gt_keypoints: [batch, MAX_GT_INSTANCES, NUM_KEYPOINTS, 3]
-                    (x, y, v)
+    proposals: [batch, N, (y1, x1, y2, x2)] in normalized coordinates. Might
+               be zero padded if there are not enough proposals, Here N <= RPN_TRAIN_ANCHORS_PER_IMAGE(256)
+               because of the NMS e.t.c
+    gt_class_ids: [batch, MAX_GT_INSTANCES] Integer class IDs.
+    gt_boxes: [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized
+              coordinates.
+    gt_keypoints: [batch, MAX_GT_INSTANCES, NUM_KEYPOINTS, 3]
+                (x, y, v)
     Returns: Target ROIs and corresponding class IDs, bounding box shifts,
-        keypoint_weights and keypoint_masks.
-        rois: [batch, TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)] in normalized
-              coordinates
-        target_class_ids: [batch, TRAIN_ROIS_PER_IMAGE]. Integer class IDs.
-        target_deltas: [batch, TRAIN_ROIS_PER_IMAGE, NUM_CLASSES,
-                        (dy, dx, log(dh), log(dw), class_id)]
-                       Class-specific bbox refinements.
-        target_keypoints: [batch, TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS)
-                     Keypoint labels cropped to bbox boundaries and resized to neural
-                     network output size. Maps keypoints from the half-open interval [x1, x2) on continuous image
-                    coordinates to the closed interval [0, HEATMAP_SIZE - 1]
+    keypoint_weights and keypoint_masks.
+    rois: [batch, TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)] in normalized
+          coordinates
+    target_class_ids: [batch, TRAIN_ROIS_PER_IMAGE]. Integer class IDs.
+    target_deltas: [batch, TRAIN_ROIS_PER_IMAGE, NUM_CLASSES,
+                    (dy, dx, log(dh), log(dw), class_id)]
+                   Class-specific bbox refinements.
+    target_keypoints: [batch, TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS)
+                 Keypoint labels cropped to bbox boundaries and resized to neural
+                 network output size. Maps keypoints from the half-open interval [x1, x2) on continuous image
+                coordinates to the closed interval [0, HEATMAP_SIZE - 1]
 
-        target_keypoint_weights: [batch, TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS), bool type
-                     Keypoint_weights, 0: isn't visible, 1: visilble
+    target_keypoint_weights: [batch, TRAIN_ROIS_PER_IMAGE, NUM_KEYPOINTS), bool type
+                 Keypoint_weights, 0: isn't visible, 1: visilble
 
     Note: Returned arrays might be zero padded if not enough target ROIs.
     """
 
     def __init__(self, config, **kwargs):
-        super(DetectionKeypointTargetLayer, self).__init__(**kwargs)
+        super(DetectionKeypointMaskTargetLayer, self).__init__(**kwargs)
         self.config = config
 
     def call(self, inputs, **kwargs):
@@ -208,13 +238,15 @@ class DetectionKeypointTargetLayer(KE.Layer):
         gt_class_ids = inputs[1]
         gt_boxes = inputs[2]
         gt_keypoints = inputs[3]
+        gt_masks = inputs[4]
 
         # Slice the batch and run a graph for each slice
         # TODO: Rename target_bbox to target_deltas for clarity
-        names = ["rois", "target_class_ids", "target_bbox", "target_keypoint", "target_keypoint_weight"]
+        names = ["rois", "target_class_ids", "target_bbox", "target_keypoint", "target_keypoint_weight", "target_mask"]
         outputs = utils.batch_slice(
-            [proposals, gt_class_ids, gt_boxes, gt_keypoints],
-            lambda r, x, y, z: detection_keypoint_targets_graph(r, x, y, z, self.config),
+            [proposals, gt_class_ids, gt_boxes, gt_keypoints, gt_masks],
+            lambda r, x, y, z, m: detection_keypoint_mask_targets_graph(
+                r, x, y, z, m, self.config),
             self.config.IMAGES_PER_GPU, names=names)
         return outputs
 
@@ -225,4 +257,5 @@ class DetectionKeypointTargetLayer(KE.Layer):
             (None, self.config.TRAIN_ROIS_PER_IMAGE, 4),  # deltas
             (None, self.config.TRAIN_ROIS_PER_IMAGE, self.config.NUM_KEYPOINTS),  # keypoint_labels
             (None, self.config.TRAIN_ROIS_PER_IMAGE, self.config.NUM_KEYPOINTS),  # keypoint_weights
+            (None, self.config.TRAIN_ROIS_PER_IMAGE, self.config.MASK_SHAPE[0], self.config.MASK_SHAPE[1])  # masks
         ]
