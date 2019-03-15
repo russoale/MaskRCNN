@@ -19,6 +19,7 @@ import skimage.io
 import skimage.transform
 import tensorflow as tf
 import warnings
+from imgaug import Keypoint
 
 # URL from which to download the latest COCO trained weights
 COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0/mask_rcnn_coco.h5"
@@ -500,25 +501,28 @@ def create_keypoints(keypoint):
     Returns:
     ia_keypoints: [ia.Keypoints]
     """
-    import imgaug as ia
 
     ia_keypoint = []
     keypoint_shape = np.shape(keypoint)
     num_person = keypoint_shape[0]
     num_keypoint = keypoint_shape[1]
+    label_list, _ = get_keypoints()
     for i in range(num_person):
         for j in range(num_keypoint):
-            if keypoint[i, j, 2] != 0:
-                ia_keypoint.append(ia.Keypoint(x=keypoint[i, j, 0], y=keypoint[i, j, 1]))
-            else:
-                # Maintain COCO convention that if visibility == 0, then x, y = 0
-                ia_keypoint.append(ia.Keypoint(x=0, y=0))
+            ia_keypoint.append(
+                Keypoint(
+                    x=keypoint[i, j, 0],
+                    y=keypoint[i, j, 1],
+                    vis=keypoint[i, j, 2],
+                    label=label_list[j]
+                )
+            )
 
     return ia_keypoint
 
 
 def convert_back(ia_keypoints, init_keypoints):
-    """Convert list of ia.Keypoints back to original keypoint shape
+    """Convert list of KeypointVisLabel back to original keypoint shape
     for correct ground truth calculation
 
     ia_keypoints: [ia.Keypoints]
@@ -530,13 +534,16 @@ def convert_back(ia_keypoints, init_keypoints):
     keypoints = np.zeros(init_keypoints.shape, np.int16)
     num_person = init_keypoints.shape[0]
     num_keypoint = init_keypoints.shape[1]
+    keypoints_order, _ = get_keypoints()
+
     for i in range(num_person):
         for j in range(num_keypoint):
-            index = (i + 1) * (j + 1) - 1
+            index = i * num_keypoint + j
             kp = ia_keypoints.keypoints[index]
-            keypoints[i, j, 0] = kp.x
-            keypoints[i, j, 1] = kp.y
-            keypoints[i, j, 2] = init_keypoints[i, j, 2]
+            label_idx = keypoints_order.index(kp.label)
+            keypoints[i, label_idx, 0] = kp.x
+            keypoints[i, label_idx, 1] = kp.y
+            keypoints[i, label_idx, 2] = kp.vis
 
     return keypoints
 

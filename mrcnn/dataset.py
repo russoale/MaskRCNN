@@ -174,3 +174,16 @@ class Dataset(object):
         mask = np.empty([0, 0, 0])
         class_ids = np.empty([0], np.int32)
         return keypoints, mask, class_ids
+
+    def get_bbox_from_keypoints(self, keypoints, image_shape):
+        """Load bounding box from keypoints for the given image (shape).
+
+        Some dataset do not have bounding box annotations nor mask annotations
+        Override this method to support bounding box extraction given
+        a set of keypoints. Return them in the form of am
+        array of coordinate(y_top, x_top, y_bot, x_bot)
+
+        Returns:
+            Box in (y1,x1,y2,x2) format.
+        """
+        return np.empty([0])

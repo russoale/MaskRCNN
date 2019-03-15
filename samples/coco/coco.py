@@ -507,8 +507,7 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
         progress = int(100 * (i / total_image_count))
         if next_prgress != progress:
             next_prgress = progress
-            print('\r[{0}{1}] {2}%'.format('#' * progress, " " * (100-progress), progress), end=' ', flush=True)
-
+            print('\r[{0}{1}] {2}%'.format('#' * progress, " " * (100 - progress), progress), end=' ', flush=True)
 
         # Load image
         image = dataset.load_image(image_id)
@@ -726,7 +725,7 @@ if __name__ == '__main__':
         coco = dataset_val.load_coco(args.dataset, val_type, year=args.year, class_ids=[1], return_coco=True,
                                      auto_download=args.download)
         dataset_val.prepare()
-        print("Running COCO evaluation on {} images.".format(args.limit if args.limit != 0 else "all"))
+        print("Running COCO evaluation on {} images.".format(args.limit if int(args.limit) != 0 else "all"))
 
         # Create model in inference mode
         model = modellib.MaskRCNN(mode="inference", config=config, model_dir=args.logs)

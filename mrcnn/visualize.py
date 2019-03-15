@@ -177,10 +177,12 @@ def display_keypoints(image, boxes, keypoints, class_ids, class_names,
         ax.text(x1, y1 + 8, caption,
                 color='w', size=11, backgroundcolor="none")
         # Keypoints: num_person, num_keypoint, 3
-        for Joint in keypoints[i]:
+        keypoint_label, _ = utils.get_keypoints()
+        for idx, Joint in enumerate(keypoints[i]):
             if (Joint[2] != 0):
                 circle = patches.Circle((Joint[0], Joint[1]), radius=1, edgecolor=color, facecolor='none')
                 ax.add_patch(circle)
+                ax.text(Joint[0], Joint[1], keypoint_label[idx], color="w", size=8, backgroundcolor="none")
 
         # Skeleton: 19*2
         if (skeleton != None):

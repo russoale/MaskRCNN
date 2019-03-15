@@ -512,16 +512,15 @@ class DataGenerator(KU.Sequence):
         if augmentation:
             import imgaug
 
-            # Augmenters that are safe to apply to masks
+            # Augmenters that are safe to apply to masks and keypoints
             # Some, such as Affine, have settings that make them unsafe, so always
             # test your augmentation on masks
-            mask_augmenters = ["Sequential", "SomeOf", "OneOf", "Sometimes",
-                               "Fliplr", "Flipud", "CropAndPad",
-                               "Affine", "PiecewiseAffine"]
+            augmenters = ["Sequential", "SomeOf", "OneOf", "Sometimes",
+                          "FliplrKeypoint", "CropAndPad", "Affine", "PiecewiseAffine"]
 
             def hook(images, augmenter, parents, default):
                 """Determines which augmenters to apply to masks."""
-                return augmenter.__class__.__name__ in mask_augmenters
+                return augmenter.__class__.__name__ in augmenters
 
             # Store shapes before augmentation to compare
             image_shape = image.shape
