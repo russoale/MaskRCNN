@@ -71,6 +71,11 @@ class MaskRCNN:
         self.checkpoint_path = ""
         self.set_log_dir(model_dir)
         self.keras_model = self.build(mode=mode, config=config)
+        self.training_mask = True
+        self.training_keypoint = True
+        if not (config.TRAINING_HEADS is None):
+            self.training_mask = True if config.TRAINING_HEADS == "mask" else False
+            self.training_keypoint = not self.training_mask
 
     def build(self, mode, config):
         """Build Mask R-CNN architecture.
@@ -93,12 +98,6 @@ class MaskRCNN:
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
 
-        training_mask = True
-        training_keypoint = True
-        if not (config.TRAINING_HEADS is None):
-            training_mask = True if config.TRAINING_HEADS == "mask" else False
-            training_keypoint = not training_mask
-
         if mode == "training":
             # RPN GT
             input_rpn_match = KL.Input(
@@ -119,7 +118,7 @@ class MaskRCNN:
             gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
 
-            if training_mask:
+            if self.training_mask:
                 # 3. GT Masks (zero padded)
                 # [batch, height, width, MAX_GT_INSTANCES]
                 if config.USE_MINI_MASK:
@@ -132,7 +131,7 @@ class MaskRCNN:
                         shape=[config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1], None],
                         name="input_gt_masks", dtype=bool)
 
-            if training_keypoint:
+            if self.training_keypoint:
                 # 4. GT Keypoint
                 # [batch, width, height, MAX_GT_INSTANCES, NUM_KEYPOINTS, (x, y, vis)]
                 keypoint_scale = K.cast(K.stack([w, h, 1], axis=0), tf.float32)
@@ -186,7 +185,7 @@ class MaskRCNN:
             anchors = np.broadcast_to(anchors, (config.BATCH_SIZE,) + anchors.shape)
             # A hack to get around Keras's bad support for constants
             anchors = KL.Lambda(lambda x: tf.Variable(anchors), name="anchors")(input_image)
-        else:
+        elif mode == "inference":
             anchors = input_anchors
 
         # RPN Model
@@ -240,11 +239,11 @@ class MaskRCNN:
             # Note that proposal class IDs, gt_boxes, and gt_masks are zero
             # padded. Equally, returned rois and targets are zero padded.
 
-            if training_mask and training_keypoint:
+            if self.training_mask and self.training_keypoint:
                 rois, target_class_ids, target_bbox, target_keypoint, target_keypoint_weight, target_mask = \
                     DetectionKeypointMaskTargetLayer(config, name="proposal_targets")([
                         target_rois, input_gt_class_ids, gt_boxes, gt_keypoints, input_gt_masks])
-            elif training_keypoint:
+            elif self.training_keypoint:
                 rois, target_class_ids, target_bbox, target_keypoint, target_keypoint_weight = \
                     DetectionKeypointTargetLayer(config, name="proposal_targets")([
                         target_rois, input_gt_class_ids, gt_boxes, gt_keypoints])
@@ -261,14 +260,14 @@ class MaskRCNN:
                                      train_bn=config.TRAIN_BN,
                                      fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
 
-            if training_mask:
+            if self.training_mask:
                 mrcnn_mask = build_fpn_mask_graph(rois, mrcnn_feature_maps,
                                                   input_image_meta,
                                                   config.MASK_POOL_SIZE,
                                                   config.NUM_CLASSES,
                                                   train_bn=config.TRAIN_BN)
 
-            if training_keypoint:
+            if self.training_keypoint:
                 mrcnn_keypoint = build_fpn_keypoint_graph(rois, mrcnn_feature_maps, input_image_meta,
                                                           config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS,
                                                           train_bn=config.TRAIN_BN)
@@ -286,10 +285,10 @@ class MaskRCNN:
             bbox_loss = KL.Lambda(lambda x: mrcnn_bbox_loss_graph(*x), name="mrcnn_bbox_loss")(
                 [target_bbox, target_class_ids, mrcnn_bbox])
 
-            if training_mask:
+            if self.training_mask:
                 mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
                     [target_mask, target_class_ids, mrcnn_mask])
-            if training_keypoint:
+            if self.training_keypoint:
                 keypoint_loss = KL.Lambda(
                     lambda x: mrcnn_keypoint_loss_graph(*x, weight_loss=config.KEYPOINT_LOSS_WEIGHTING,
                                                         mask_shape=config.KEYPOINT_MASK_SHAPE,
@@ -300,9 +299,9 @@ class MaskRCNN:
             # Model
             inputs = [input_image, input_image_meta, input_rpn_match, input_rpn_bbox,
                       input_gt_class_ids, input_gt_boxes]
-            if training_keypoint:
+            if self.training_keypoint:
                 inputs.append(input_gt_keypoints)
-            if training_mask:
+            if self.training_mask:
                 inputs.append(input_gt_masks)
             if not config.USE_RPN_ROIS:
                 inputs.append(input_rois)
@@ -328,20 +327,25 @@ class MaskRCNN:
 
             # Create masks for detections
             detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
-            mrcnn_mask = build_fpn_mask_graph(detection_boxes, mrcnn_feature_maps,
-                                              input_image_meta,
-                                              config.MASK_POOL_SIZE,
-                                              config.NUM_CLASSES,
-                                              train_bn=config.TRAIN_BN)
-            keypoint_mrcnn = build_fpn_keypoint_graph(detection_boxes, mrcnn_feature_maps, input_image_meta,
-                                                      config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS,
-                                                      train_bn=config.TRAIN_BN)
 
-            keypoint_mcrcnn_prob = KL.Activation("softmax", name="mrcnn_prob")(keypoint_mrcnn)
-            model = KM.Model([input_image, input_image_meta, input_anchors],
-                             [detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask,
-                              keypoint_mcrcnn_prob],
-                             name='mask_keypoint_mrcnn')
+            inputs = [input_image, input_image_meta, input_anchors]
+            detection = [detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox]
+            if self.training_mask:
+                mrcnn_mask = build_fpn_mask_graph(detection_boxes, mrcnn_feature_maps,
+                                                  input_image_meta,
+                                                  config.MASK_POOL_SIZE,
+                                                  config.NUM_CLASSES,
+                                                  train_bn=config.TRAIN_BN)
+                detection.append(mrcnn_mask)
+            if self.training_keypoint:
+                keypoint_mrcnn = build_fpn_keypoint_graph(detection_boxes, mrcnn_feature_maps, input_image_meta,
+                                                          config.KEYPOINT_MASK_POOL_SIZE, config.NUM_KEYPOINTS,
+                                                          train_bn=config.TRAIN_BN)
+                keypoint_mcrcnn_prob = KL.Activation("softmax", name="mrcnn_prob")(keypoint_mrcnn)
+                detection.append(keypoint_mcrcnn_prob)
+            name = "%s%smrcnn".format("mask_" if self.training_mask else "",
+                                      "keypoint_" if self.training_keypoint else "")
+            model = KM.Model(inputs, detection, name=name)
 
         # Add multi-GPU support.
         if config.GPU_COUNT > 1:
@@ -392,7 +396,11 @@ class MaskRCNN:
         self.keras_model._losses = []
         self.keras_model._per_input_losses = {}
         loss_names = ["rpn_class_loss", "rpn_bbox_loss",
-                      "mrcnn_class_loss", "mrcnn_bbox_loss", "mrcnn_keypoint_loss", "mrcnn_mask_loss"]
+                      "mrcnn_class_loss", "mrcnn_bbox_loss"]
+        if self.training_keypoint:
+            loss_names.append("mrcnn_keypoint_loss")
+        if self.training_mask:
+            loss_names.append("mrcnn_mask_loss")
         for name in loss_names:
             layer = self.keras_model.get_layer(name)
             if layer.output in self.keras_model.losses:
@@ -666,7 +674,7 @@ class MaskRCNN:
             log("anchors", anchors)
         # Run object detection
         detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask, \
-        keypoint_mcrcnn_prob = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+            keypoint_mcrcnn_prob = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
 
         # Process detections
         results = []
@@ -727,7 +735,7 @@ class MaskRCNN:
 
         # Run human pose detection
         detections, mrcnn_class, mrcnn_bbox, rois, rpn_class, rpn_bbox, mrcnn_mask, \
-        mrcnn_keypoint = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+            mrcnn_keypoint = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
 
         if verbose:
             log("------ Predictions ----------")
@@ -878,10 +886,10 @@ class MaskRCNN:
         # Loop through all layers
         for l in self.keras_model.layers:
             # If layer is a wrapper, find inner trainable layer
-            l = self.find_trainable_layer(l)
+            layer = self.find_trainable_layer(l)
             # Include layer if it has weights
-            if l.get_weights():
-                layers.append(l)
+            if layer.get_weights():
+                layers.append(layer)
         return layers
 
     def run_graph(self, images, outputs, image_metas=None):
