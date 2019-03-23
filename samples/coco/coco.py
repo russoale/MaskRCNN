@@ -118,7 +118,7 @@ class CocoConfig(Config):
 
     LEARNING_RATE = 0.001
 
-    STEPS_PER_EPOCH = 2000
+    STEPS_PER_EPOCH = 1000
 
     KEYPOINT_LOSS_WEIGHTING = True
 
@@ -660,14 +660,14 @@ if __name__ == '__main__':
         augmentation = FliplrKeypoint(0.5, config=config)
 
         # training phase schedule
-        lr_values = [config.LEARNING_RATE,
+        lr_values = [config.LEARNING_RATE * 2,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
         epochs_values = [40,
                          120,
                          160]
         trainable_layers = ["heads",
-                            "all",
+                            "4+",
                             "all"]
 
         last_layers = None
