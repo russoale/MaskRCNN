@@ -26,17 +26,29 @@ class FliplrKeypoint(flip.Fliplr):
         return super().get_parameters()
 
     def _augment_keypoints(self, keypoints_on_images, random_state, parents, hooks):
-        keypoints_on_images = super()._augment_keypoints(keypoints_on_images, random_state, parents, hooks)
-
+        keypoints_on_image_copy = None
         keypoints_label, keypoint_flip_map = utils.get_keypoints()
-        flipped_keypoint_labels = copy.deepcopy(keypoints_on_images)
+
+        nb_images = len(keypoints_on_images)
+        samples = self.p.draw_samples((nb_images,), random_state=random_state)
 
         for i, keypoints_per_image in enumerate(keypoints_on_images):
-            for j, _ in enumerate(range(0, len(keypoints_per_image.keypoints), self.config.NUM_KEYPOINTS)):
-                for lkp, rkp in keypoint_flip_map.items():
-                    lid = keypoints_label.index(lkp) + (j * self.config.NUM_KEYPOINTS)
-                    rid = keypoints_label.index(rkp) + (j * self.config.NUM_KEYPOINTS)
-                    flipped_keypoint_labels[i].keypoints[rid].label = keypoints_per_image.keypoints[lid].label
-                    flipped_keypoint_labels[i].keypoints[lid].label = keypoints_per_image.keypoints[rid].label
+            if not keypoints_per_image.keypoints:
+                continue
+            elif samples[i] == 1:
+                width = keypoints_per_image.shape[1]
+                for keypoint in keypoints_per_image.keypoints:
+                    keypoint.x = (width - 1) - keypoint.x
 
-        return flipped_keypoint_labels
+                keypoints_on_image_copy = copy.deepcopy(keypoints_on_images)
+                for j, _ in enumerate(range(0, len(keypoints_per_image.keypoints), self.config.NUM_KEYPOINTS)):
+                    for lkp, rkp in keypoint_flip_map.items():
+                        lid = keypoints_label.index(lkp) + (j * self.config.NUM_KEYPOINTS)
+                        rid = keypoints_label.index(rkp) + (j * self.config.NUM_KEYPOINTS)
+                        keypoints_on_image_copy[i].keypoints[rid].label = keypoints_per_image.keypoints[lid].label
+                        keypoints_on_image_copy[i].keypoints[lid].label = keypoints_per_image.keypoints[rid].label
+
+        if keypoints_on_image_copy is None:
+            return keypoints_on_images
+
+        return keypoints_on_image_copy
