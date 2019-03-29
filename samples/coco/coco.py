@@ -27,12 +27,15 @@ Usage: import the module (see Jupyter notebooks for examples), or run from
     python3 coco.py evaluate --dataset=/path/to/coco/ --model=last
 """
 
-import os
 import sys
 import time
-import numpy as np
-import imgaug  # https://github.com/aleju/imgaug (pip3 install imgaug)
+import urllib.request
+import zipfile
 
+import numpy as np
+import os
+import shutil
+from pycocotools import mask as maskUtils
 # Download and install the Python COCO tools from https://github.com/waleedka/coco
 # That's a fork from the original https://github.com/pdollar/coco with a bug
 # fix for Python 3.
@@ -41,11 +44,6 @@ import imgaug  # https://github.com/aleju/imgaug (pip3 install imgaug)
 # Note: Edit PythonAPI/Makefile and replace "python" with "python3".
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
-from pycocotools import mask as maskUtils
-
-import zipfile
-import urllib.request
-import shutil
 
 # Root directory of the project
 ROOT_DIR = os.path.abspath("../../")
@@ -60,6 +58,7 @@ from mrcnn import model as modellib
 from mrcnn import utils
 from mrcnn import dataset
 from mrcnn.load_weights import load_weights
+from mrcnn.augmenter import FliplrKeypoint
 
 # Local path to trained weights file
 COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_rcnn_coco_0160.h5")
@@ -658,13 +657,13 @@ if __name__ == '__main__':
 
         # Image Augmentation
         # Right/Left flip 50% of the time
-        augmentation = imgaug.augmenters.Fliplr(0.5)
+        augmentation = FliplrKeypoint(0.5, config=config)
 
         # training phase schedule
-        lr_values = [config.LEARNING_RATE,
+        lr_values = [config.LEARNING_RATE * 2,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
-        epochs_values = [20,
+        epochs_values = [40,
                          120,
                          160]
         trainable_layers = ["heads",
