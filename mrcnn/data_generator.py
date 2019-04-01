@@ -1,9 +1,9 @@
 import logging
+import os
 
 import imgaug as ia
 import keras.utils as KU
 import numpy as np
-import os
 
 from mrcnn import utils
 from mrcnn.data_formatting import compose_image_meta, mold_image
@@ -82,6 +82,12 @@ class DataGenerator(KU.Sequence):
                                                       self.backbone_shapes,
                                                       self.config.BACKBONE_STRIDES,
                                                       self.config.RPN_ANCHOR_STRIDE)
+        self.training_mask = True
+        self.training_keypoint = True
+        if not (config.TRAINING_HEADS is None):
+            self.training_mask = True if config.TRAINING_HEADS == "mask" else False
+            self.training_keypoint = not self.training_mask
+
         if self.shuffle:
             # Initial shuffle
             if self.process_unique_shuffle:
@@ -144,7 +150,9 @@ class DataGenerator(KU.Sequence):
                 active_indices = np.where(gt_class_ids != 0)
                 gt_class_ids = gt_class_ids[active_indices]
                 gt_boxes = gt_boxes[active_indices]
-                gt_keypoints = gt_keypoints[active_indices]
+
+                if not (gt_keypoints is None):
+                    gt_keypoints = gt_keypoints[active_indices]
 
                 # RPN Targets
                 rpn_match, rpn_bbox = self.build_rpn_targets(gt_class_ids, gt_boxes)
@@ -170,11 +178,14 @@ class DataGenerator(KU.Sequence):
                         (self.batch_size, self.config.MAX_GT_INSTANCES), dtype=np.int32)
                     batch_gt_boxes = np.zeros(
                         (self.batch_size, self.config.MAX_GT_INSTANCES, 4), dtype=np.int32)
-                    batch_gt_keypoints = np.zeros(
-                        (self.batch_size, self.config.MAX_GT_INSTANCES, self.config.NUM_KEYPOINTS, 3))
-                    batch_gt_masks = np.zeros(
-                        (self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
-                         self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
+
+                    if not (gt_keypoints is None):
+                        batch_gt_keypoints = np.zeros(
+                            (self.batch_size, self.config.MAX_GT_INSTANCES, self.config.NUM_KEYPOINTS, 3))
+                    if not (gt_masks is None):
+                        batch_gt_masks = np.zeros(
+                            (self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
+                             self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
 
                     if self.random_rois:
                         batch_rpn_rois = np.zeros(
@@ -186,12 +197,15 @@ class DataGenerator(KU.Sequence):
                                 (self.batch_size,) + mrcnn_class_ids.shape, dtype=mrcnn_class_ids.dtype)
                             batch_mrcnn_bbox = np.zeros(
                                 (self.batch_size,) + mrcnn_bbox.shape, dtype=mrcnn_bbox.dtype)
-                            batch_mrcnn_mask = np.zeros(
-                                (self.batch_size,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
-                            batch_mrcnn_keypoints = np.zeros(
-                                (self.batch_size,) + mrcnn_keypoints.shape, dtype=mrcnn_keypoints.dtype)
-                            batch_mrcnn_keypoint_weights = np.zeros(
-                                (self.batch_size,) + mrcnn_keypoint_weights.shape, dtype=mrcnn_keypoint_weights.dtype)
+                            if not (gt_masks is None):
+                                batch_mrcnn_mask = np.zeros(
+                                    (self.batch_size,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
+                            if not (gt_keypoints is None):
+                                batch_mrcnn_keypoints = np.zeros(
+                                    (self.batch_size,) + mrcnn_keypoints.shape, dtype=mrcnn_keypoints.dtype)
+                                batch_mrcnn_keypoint_weights = np.zeros(
+                                    (self.batch_size,) + mrcnn_keypoint_weights.shape,
+                                    dtype=mrcnn_keypoint_weights.dtype)
 
                 # If more instances than fits in the array, sub-sample from them.
                 if gt_boxes.shape[0] > self.config.MAX_GT_INSTANCES:
@@ -199,8 +213,10 @@ class DataGenerator(KU.Sequence):
                         np.arange(gt_boxes.shape[0]), self.config.MAX_GT_INSTANCES, replace=False)
                     gt_class_ids = gt_class_ids[ids]
                     gt_boxes = gt_boxes[ids]
-                    gt_masks = gt_masks[:, :, ids]
-                    gt_keypoints = gt_keypoints[ids, :]
+                    if not (gt_masks is None):
+                        gt_masks = gt_masks[:, :, ids]
+                    if not (gt_keypoints is None):
+                        gt_keypoints = gt_keypoints[ids, :]
 
                 # Add to batch
                 batch_image_meta[b] = image_meta
@@ -209,8 +225,10 @@ class DataGenerator(KU.Sequence):
                 batch_images[b] = mold_image(image.astype(np.float32), self.config)
                 batch_gt_class_ids[b, :gt_class_ids.shape[0]] = gt_class_ids
                 batch_gt_boxes[b, :gt_boxes.shape[0]] = gt_boxes
-                batch_gt_masks[b, :, :, :gt_masks.shape[-1]] = gt_masks
-                batch_gt_keypoints[b, :gt_keypoints.shape[0], :, :] = gt_keypoints
+                if not (gt_masks is None):
+                    batch_gt_masks[b, :, :, :gt_masks.shape[-1]] = gt_masks
+                if not (gt_keypoints is None):
+                    batch_gt_keypoints[b, :gt_keypoints.shape[0], :, :] = gt_keypoints
 
                 if self.random_rois:
                     batch_rpn_rois[b] = rpn_rois
@@ -218,9 +236,11 @@ class DataGenerator(KU.Sequence):
                         batch_rois[b] = rois
                         batch_mrcnn_class_ids[b] = mrcnn_class_ids
                         batch_mrcnn_bbox[b] = mrcnn_bbox
-                        batch_mrcnn_mask[b] = mrcnn_mask
-                        batch_mrcnn_keypoints[b] = mrcnn_keypoints
-                        batch_mrcnn_keypoint_weights[b] = mrcnn_keypoint_weights
+                        if not (gt_masks is None):
+                            batch_mrcnn_mask[b] = mrcnn_mask
+                        if not (gt_keypoints is None):
+                            batch_mrcnn_keypoints[b] = mrcnn_keypoints
+                            batch_mrcnn_keypoint_weights[b] = mrcnn_keypoint_weights
 
                 # Data item successfully processed, go to next batch entry
                 b += 1
@@ -237,7 +257,11 @@ class DataGenerator(KU.Sequence):
 
         # Batch full
         inputs = [batch_images, batch_image_meta, batch_rpn_match, batch_rpn_bbox,
-                  batch_gt_class_ids, batch_gt_boxes, batch_gt_keypoints, batch_gt_masks]
+                  batch_gt_class_ids, batch_gt_boxes]
+        if not (gt_keypoints is None):
+            inputs.append(batch_gt_keypoints)
+        if not (gt_masks is None):
+            inputs.append(batch_gt_masks)
         outputs = []
 
         if self.random_rois:
@@ -247,9 +271,11 @@ class DataGenerator(KU.Sequence):
                 # Keras requires that output and targets have the same number of dimensions
                 batch_mrcnn_class_ids = np.expand_dims(
                     batch_mrcnn_class_ids, -1)
-                outputs.extend(
-                    [batch_mrcnn_class_ids, batch_mrcnn_bbox, batch_mrcnn_mask, batch_mrcnn_keypoints,
-                     batch_mrcnn_keypoint_weights])
+                outputs.extend([batch_mrcnn_class_ids, batch_mrcnn_bbox])
+                if not (gt_masks is None):
+                    outputs.append(batch_mrcnn_mask)
+                if not (gt_keypoints is None):
+                    outputs.append([batch_mrcnn_keypoints, batch_mrcnn_keypoint_weights])
 
         return inputs, outputs
 
@@ -287,10 +313,11 @@ class DataGenerator(KU.Sequence):
             gt_class_ids.dtype)
         assert gt_boxes.dtype == np.int32, "Expected int but got {}".format(
             gt_boxes.dtype)
-        assert gt_masks.dtype == np.bool_, "Expected bool but got {}".format(
-            gt_masks.dtype)
-        assert gt_keypoints.dtype == np.int32, "Expected int but got {}".format(
-            gt_keypoints.dtype)
+
+        if not (gt_masks is None):
+            assert gt_masks.dtype == np.bool_, "Expected bool but got {}".format(gt_masks.dtype)
+        if not (gt_keypoints is None):
+            assert gt_keypoints.dtype == np.int32, "Expected int but got {}".format(gt_keypoints.dtype)
 
         # It's common to add GT Boxes to ROIs but we don't do that here because
         # according to XinLei Chen's paper, it doesn't help.
@@ -300,8 +327,11 @@ class DataGenerator(KU.Sequence):
         assert instance_ids.shape[0] > 0, "Image must contain instances."
         gt_class_ids = gt_class_ids[instance_ids]
         gt_boxes = gt_boxes[instance_ids]
-        gt_masks = gt_masks[:, :, instance_ids]
-        gt_keypoints = gt_keypoints[instance_ids]
+
+        if not (gt_masks is None):
+            gt_masks = gt_masks[:, :, instance_ids]
+        if not (gt_keypoints is None):
+            gt_keypoints = gt_keypoints[instance_ids]
 
         # Compute areas of ROIs and ground truth boxes.
         rpn_roi_area = (rpn_rois[:, 2] - rpn_rois[:, 0]) * \
@@ -391,38 +421,44 @@ class DataGenerator(KU.Sequence):
         bboxes /= self.config.BBOX_STD_DEV
 
         # Generate class-specific target masks
-        masks = np.zeros((self.config.TRAIN_ROIS_PER_IMAGE, self.config.MASK_SHAPE[0],
-                          self.config.MASK_SHAPE[1], self.config.NUM_CLASSES),
-                         dtype=np.float32)
+        masks = None
+        if not (gt_masks is None):
+            masks = np.zeros((self.config.TRAIN_ROIS_PER_IMAGE, self.config.MASK_SHAPE[0],
+                              self.config.MASK_SHAPE[1], self.config.NUM_CLASSES),
+                             dtype=np.float32)
         for i in pos_ids:
             class_id = roi_gt_class_ids[i]
             assert class_id > 0, "class id must be greater than 0"
             gt_id = roi_gt_assignment[i]
-            class_mask = gt_masks[:, :, gt_id]
 
-            if self.config.USE_MINI_MASK:
-                # Create a mask placeholder, the size of the image
-                placeholder = np.zeros(self.config.IMAGE_SHAPE[:2], dtype=bool)
-                # GT box
-                gt_y1, gt_x1, gt_y2, gt_x2 = gt_boxes[gt_id]
-                gt_w = gt_x2 - gt_x1
-                gt_h = gt_y2 - gt_y1
-                # Resize mini mask to size of GT box
-                placeholder[gt_y1:gt_y2, gt_x1:gt_x2] = \
-                    np.round(utils.resize(class_mask, (gt_h, gt_w))).astype(bool)
-                # Place the mini batch in the placeholder
-                class_mask = placeholder
+            if not (gt_masks is None):
+                class_mask = gt_masks[:, :, gt_id]
+                if self.config.USE_MINI_MASK:
+                    # Create a mask placeholder, the size of the image
+                    placeholder = np.zeros(self.config.IMAGE_SHAPE[:2], dtype=bool)
+                    # GT box
+                    gt_y1, gt_x1, gt_y2, gt_x2 = gt_boxes[gt_id]
+                    gt_w = gt_x2 - gt_x1
+                    gt_h = gt_y2 - gt_y1
+                    # Resize mini mask to size of GT box
+                    placeholder[gt_y1:gt_y2, gt_x1:gt_x2] = \
+                        np.round(utils.resize(class_mask, (gt_h, gt_w))).astype(bool)
+                    # Place the mini batch in the placeholder
+                    class_mask = placeholder
 
-            # Pick part of the mask and resize it
-            y1, x1, y2, x2 = rois[i].astype(np.int32)
-            m = class_mask[y1:y2, x1:x2]
-            mask = utils.resize(m, self.config.MASK_SHAPE)
-            masks[i, :, :, class_id] = mask
+                # Pick part of the mask and resize it
+                y1, x1, y2, x2 = rois[i].astype(np.int32)
+                m = class_mask[y1:y2, x1:x2]
+                mask = utils.resize(m, self.config.MASK_SHAPE)
+                masks[i, :, :, class_id] = mask
 
-        keypoints = np.zeros((self.config.TRAIN_ROIS_PER_IMAGE,
-                              self.config.NUM_KEYPOINTS), dtype=np.float32)
-        keypoint_weights = np.zeros((self.config.TRAIN_ROIS_PER_IMAGE,
-                                     self.config.NUM_KEYPOINTS), dtype=np.float32)
+        keypoints = None
+        keypoint_weights = None
+        if not (gt_keypoints is None):
+            keypoints = np.zeros((self.config.TRAIN_ROIS_PER_IMAGE,
+                                  self.config.NUM_KEYPOINTS), dtype=np.float32)
+            keypoint_weights = np.zeros((self.config.TRAIN_ROIS_PER_IMAGE,
+                                         self.config.NUM_KEYPOINTS), dtype=np.float32)
 
         for i in pos_ids:
             class_id = roi_gt_class_ids[i]
@@ -430,37 +466,38 @@ class DataGenerator(KU.Sequence):
             if class_id == 1:
                 # Person class is class id 1
                 gt_id = roi_gt_assignment[i]
-                cur_keypoints = gt_keypoints[gt_id].astype(np.float32)
-                y1, x1, y2, x2 = rois[i]  # in image coords
-                scale_x = self.config.KEYPOINT_MASK_SHAPE[1] / (x2 - x1)
-                scale_y = self.config.KEYPOINT_MASK_SHAPE[0] / (y2 - y1)
+                if not (gt_keypoints is None):
+                    cur_keypoints = gt_keypoints[gt_id].astype(np.float32)
+                    y1, x1, y2, x2 = rois[i]  # in image coords
+                    scale_x = self.config.KEYPOINT_MASK_SHAPE[1] / (x2 - x1)
+                    scale_y = self.config.KEYPOINT_MASK_SHAPE[0] / (y2 - y1)
 
-                for k in range(self.config.NUM_KEYPOINTS):
-                    vis = cur_keypoints[k, 2] > 0
-                    x = cur_keypoints[k, 0]
-                    y = cur_keypoints[k, 1]  # in imgae coords
+                    for k in range(self.config.NUM_KEYPOINTS):
+                        vis = cur_keypoints[k, 2] > 0
+                        x = cur_keypoints[k, 0]
+                        y = cur_keypoints[k, 1]  # in imgae coords
 
-                    x_rel = x - x1
-                    y_rel = y - y1
+                        x_rel = x - x1
+                        y_rel = y - y1
 
-                    x_rel_map = int(x_rel * scale_x + 0.5)
-                    y_rel_map = int(y_rel * scale_y + 0.5)
+                        x_rel_map = int(x_rel * scale_x + 0.5)
+                        y_rel_map = int(y_rel * scale_y + 0.5)
 
-                    if x_rel_map == self.config.KEYPOINT_MASK_SHAPE[1]:
-                        x_rel_map = self.config.KEYPOINT_MASK_SHAPE[1] - 1
-                    if y_rel_map == self.config.KEYPOINT_MASK_SHAPE[0]:
-                        y_rel_map = self.config.KEYPOINT_MASK_SHAPE[0] - 1
+                        if x_rel_map == self.config.KEYPOINT_MASK_SHAPE[1]:
+                            x_rel_map = self.config.KEYPOINT_MASK_SHAPE[1] - 1
+                        if y_rel_map == self.config.KEYPOINT_MASK_SHAPE[0]:
+                            y_rel_map = self.config.KEYPOINT_MASK_SHAPE[0] - 1
 
-                    valid = 0 <= x_rel_map < self.config.KEYPOINT_MASK_SHAPE[1] and \
-                            0 <= y_rel_map < self.config.KEYPOINT_MASK_SHAPE[0]
-                    valid = valid and vis
-                    if not valid:
-                        x_rel_map, y_rel_map = 0.0, 0.0
+                        valid = 0 <= x_rel_map < self.config.KEYPOINT_MASK_SHAPE[1] and \
+                                0 <= y_rel_map < self.config.KEYPOINT_MASK_SHAPE[0]
+                        valid = valid and vis
+                        if not valid:
+                            x_rel_map, y_rel_map = 0.0, 0.0
 
-                    keypoint_weights[i, k] = valid
+                        keypoint_weights[i, k] = valid
 
-                    keypoint_label = y_rel_map * self.config.KEYPOINT_MASK_SHAPE[1] + x_rel_map
-                    keypoints[i, k] = keypoint_label
+                        keypoint_label = y_rel_map * self.config.KEYPOINT_MASK_SHAPE[1] + x_rel_map
+                        keypoints[i, k] = keypoint_label
 
         return rois, roi_gt_class_ids, bboxes, masks, keypoints, keypoint_weights
 
@@ -493,9 +530,6 @@ class DataGenerator(KU.Sequence):
         """
         # Load image and mask
         image = self.dataset.load_image(image_id)
-        keypoints, mask, class_ids = self.dataset.load_keypoints_mask(image_id)
-        original_shape = image.shape
-        assert (self.config.NUM_KEYPOINTS == keypoints.shape[1])
 
         image, window, scale, padding, crop = utils.resize_image(
             image,
@@ -503,9 +537,18 @@ class DataGenerator(KU.Sequence):
             min_scale=self.config.IMAGE_MIN_SCALE,
             max_dim=self.config.IMAGE_MAX_DIM,
             mode=self.config.IMAGE_RESIZE_MODE)
+        original_shape = image.shape
 
-        mask = utils.resize_mask(mask, scale, padding, crop)
-        keypoints = utils.resize_keypoints(keypoints, image.shape[:2], scale, padding)
+        keypoints = None
+        if self.training_keypoint:
+            keypoints, class_ids = self.dataset.load_keypoints(image_id)
+            assert (self.config.NUM_KEYPOINTS == keypoints.shape[1])
+            keypoints = utils.resize_keypoints(keypoints, image.shape[:2], scale, padding)
+
+        mask = None
+        if self.training_mask:
+            mask, class_ids = self.dataset.load_mask(image_id)
+            mask = utils.resize_mask(mask, scale, padding, crop)
 
         # Augmentation
         # This requires the imgaug lib (https://github.com/aleju/imgaug)
@@ -522,41 +565,51 @@ class DataGenerator(KU.Sequence):
                 """Determines which augmenters to apply to masks."""
                 return augmenter.__class__.__name__ in augmenters
 
+            # Change mask to np.uint8 because imgaug doesn't support np.bool
+            hooks = imgaug.HooksImages(activator=hook)
+
             # Store shapes before augmentation to compare
             image_shape = image.shape
-            mask_shape = mask.shape
-            keypoint_shape = keypoints.shape
+
             # Make augmenters deterministic to apply similarly to images and masks
             det = augmentation.to_deterministic()
             image = det.augment_image(image)
-            # Change mask to np.uint8 because imgaug doesn't support np.bool
-            hooks = imgaug.HooksImages(activator=hook)
-            mask = det.augment_image(mask.astype(np.uint8), hooks=hooks)
-
-            ia_keypoints = utils.create_keypoints(keypoints)
-            if ia_keypoints:
-                ia_keypoints = ia.KeypointsOnImage(ia_keypoints, shape=image_shape)
-                ia_keypoints = det.augment_keypoints([ia_keypoints], hooks=hooks)[0]
-                keypoints = utils.convert_back(ia_keypoints, keypoints)
-            # Verify that shapes didn't change
             assert image.shape == image_shape, "Augmentation shouldn't change image size"
-            assert mask.shape == mask_shape, "Augmentation shouldn't change mask size"
-            assert keypoints.shape == keypoint_shape, "Augmentation shouldn't change keypoints size"
-            # Change mask back to bool
-            mask = mask.astype(np.bool)
 
-        # Note that some boxes might be all zeros if the corresponding mask got cropped out.
-        # and here is to filter them out
-        _idx = np.sum(mask, axis=(0, 1)) > 0
-        mask = mask[:, :, _idx]
-        class_ids = class_ids[_idx]
+            if not (mask is None):
+                mask_shape = mask.shape
+                mask = det.augment_image(mask.astype(np.uint8), hooks=hooks)
+                assert mask.shape == mask_shape, "Augmentation shouldn't change mask size"
+                # Change mask back to bool
+                mask = mask.astype(np.bool)
 
-        # Bounding boxes. Note that some boxes might be all zeros
-        # if the corresponding mask got cropped out.
-        # bbox: [num_instances, (y1, x1, y2, x2)]
-        # print("mask shape:",np.shape(mask))
-        # print("keypoint mask shape:",np.shape(keypoint_mask))
-        bbox = utils.extract_bboxes(mask)
+            if not (keypoints is None):
+                keypoint_shape = keypoints.shape
+                ia_keypoints = utils.create_keypoints(keypoints)
+                if ia_keypoints:
+                    ia_keypoints = ia.KeypointsOnImage(ia_keypoints, shape=image_shape)
+                    ia_keypoints = det.augment_keypoints([ia_keypoints], hooks=hooks)[0]
+                    keypoints = utils.convert_back(ia_keypoints, keypoints)
+                assert keypoints.shape == keypoint_shape, "Augmentation shouldn't change keypoints size"
+
+        if self.training_mask:
+            # Note that some boxes might be all zeros if the corresponding mask got cropped out.
+            # and here is to filter them out
+            _idx = np.sum(mask, axis=(0, 1)) > 0
+            mask = mask[:, :, _idx]
+            class_ids = class_ids[_idx]
+
+            # Bounding boxes. Note that some boxes might be all zeros
+            # if the corresponding mask got cropped out.
+            # bbox: [num_instances, (y1, x1, y2, x2)]
+            # print("mask shape:",np.shape(mask))
+            # print("keypoint mask shape:",np.shape(keypoint_mask))
+            bbox = utils.extract_bboxes(mask)
+        elif self.training_keypoint:
+            if hasattr(self.dataset, 'load_bbox'):
+                bbox = self.dataset.load_bbox(image_id)
+            else:
+                bbox = self.dataset.get_bbox_from_keypoints(keypoints, image.shape)
 
         # Active classes
         # Different datasets have different classes, so track the
@@ -569,7 +622,7 @@ class DataGenerator(KU.Sequence):
         active_class_ids[source_class_ids] = 1
 
         # Resize masks to smaller size to reduce memory usage
-        if use_mini_mask:
+        if use_mini_mask and self.training_mask:
             mask = utils.minimize_mask(bbox, mask, self.config.MINI_MASK_SHAPE)
 
         # Image meta data

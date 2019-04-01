@@ -154,6 +154,24 @@ class Dataset(object):
         class_ids = np.empty([0], np.int32)
         return mask, class_ids
 
+    def load_keypoints(self, image_id):
+        """Load instance mask and keypoints for the given image.
+
+        Different datasets use different ways to store keypoints. Override this
+        method to load keypoints and return them in the form of am
+        array of coordinate(x,y) of shape [num_keypoints, 3].
+
+        Returns:
+        keypoints: A  array of coordinate and visibility [num_keypoints, 3] with
+            (x,y, v) per instance.
+        class_ids: a 1D array of class IDs of the instance masks.
+        """
+        # Override this function to load a keypoint from your dataset.
+        # Otherwise, it returns an empty keypoints.
+        keypoints = np.empty([0, 0])
+        class_ids = np.empty([0], np.int32)
+        return keypoints, class_ids
+
     def load_keypoints_mask(self, image_id):
         """Load instance mask and keypoints for the given image.
 
@@ -174,6 +192,19 @@ class Dataset(object):
         mask = np.empty([0, 0, 0])
         class_ids = np.empty([0], np.int32)
         return keypoints, mask, class_ids
+
+    def load_bbox(self, image_id):
+        """Load instance bounding box for the given image.
+
+        Different datasets use different ways to store bbox. Override this
+        method to load bbox and return them in the form of an
+        array of coordinate(x,y) of shape [4].
+
+        Returns:
+        bbox: Box in (y1,x1,y2,x2) format.
+        """
+        bbox = np.empty([0])
+        return bbox
 
     def get_bbox_from_keypoints(self, keypoints, image_shape):
         """Load bounding box from keypoints for the given image (shape).

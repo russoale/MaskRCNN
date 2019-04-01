@@ -355,6 +355,61 @@ class CocoDataset(dataset.Dataset):
             # Call super class to return an empty mask
             return super(CocoDataset, self).load_keypoints_mask(image_id)
 
+    def load_keypoints(self, image_id):
+        """Load person keypoints for the given image.
+
+        Returns:
+        key_points: num_keypoints coordinates and visibility (x,y,v)  [num_person,num_keypoints,3] of num_person
+        class_ids: a 1D array of class IDs of the instance masks, here is always equal to [num_person, 1]
+        """
+        # If not a COCO image, delegate to parent class.
+        image_info = self.image_info[image_id]
+        if image_info["source"] != "coco":
+            return super(CocoDataset, self).load_mask(image_id)
+
+        keypoints = []
+        class_ids = []
+        annotations = self.image_info[image_id]["annotations"]
+        # Build mask of shape [height, width, instance_count] and list
+        # of class IDs that correspond to each channel of the mask.
+        for annotation in annotations:
+            class_id = self.map_source_class_id(
+                "coco.{}".format(annotation['category_id']))
+            # only class person for keypoints
+            assert class_id == 1
+
+            if class_id:
+                # load masks
+                m = self.ann_to_mask(annotation, image_info["height"],
+                                     image_info["width"])
+                # Some objects are so small that they're less than 1 pixel area
+                # and end up rounded out. Skip those objects.
+                if m.max() < 1:
+                    continue
+                # Is it a crowd? If so, use a negative class ID.
+                if annotation['iscrowd']:
+                    # Use negative class ID for crowds
+                    class_id *= -1
+                    # For crowd masks, annToMask() sometimes returns a mask
+                    # smaller than the given dimensions. If so, resize it.
+                    if m.shape[0] != image_info["height"] or m.shape[1] != image_info["width"]:
+                        m = np.ones([image_info["height"], image_info["width"]], dtype=bool)
+                # load keypoints
+                keypoint = annotation["keypoints"]
+                keypoint = np.reshape(keypoint, (-1, 3))
+
+                keypoints.append(keypoint)
+                class_ids.append(class_id)
+
+        # Pack instance masks into an array
+        if class_ids:
+            keypoints = np.array(keypoints, dtype=np.int32)
+            class_ids = np.array(class_ids, dtype=np.int32)
+            return keypoints, class_ids
+        else:
+            # Call super class to return an empty mask
+            return super(CocoDataset, self).load_keypoints_mask(image_id)
+
     def load_mask(self, image_id):
         """Load instance masks for the given image.
 
@@ -406,6 +461,31 @@ class CocoDataset(dataset.Dataset):
         else:
             # Call super class to return an empty mask
             return super(CocoDataset, self).load_mask(image_id)
+
+    def load_bbox(self, image_id):
+        """Load instance bbox for the given image.
+
+        Different datasets use different ways to store bboxes. This
+        function converts the different bbox format to one format
+        in the form of array with coordinates in (y1,x1,y2,x2).
+
+        Returns:
+        bbox: Box in (y1,x1,y2,x2) format.
+        """
+        # If not a COCO image, delegate to parent class.
+        image_info = self.image_info[image_id]
+        if image_info["source"] != "coco":
+            return super(CocoDataset, self).load_mask(image_id)
+
+        annotations = image_info["annotations"]
+        boxes = np.zeros([len(annotations), 4], dtype=np.int32)
+        for i, annotation in enumerate(annotations):
+            y1 = annotation["bbox"][1]  # y1
+            x1 = annotation["bbox"][0]  # x1
+            y2 = annotation["bbox"][3] + y1  # y2
+            x2 = annotation["bbox"][2] + x1  # x2
+            boxes[i] = np.array([y1, x1, y2, x2])
+        return boxes.astype(np.int32)
 
     def image_reference(self, image_id):
         """Return a link to the image in the COCO Website."""

@@ -63,6 +63,11 @@ class MaskRCNN:
         model_dir: Directory to save training logs and trained weights
         """
         assert mode in ['training', 'inference']
+        self.training_mask = True
+        self.training_keypoint = True
+        if not (config.TRAINING_HEADS is None):
+            self.training_mask = True if config.TRAINING_HEADS == "mask" else False
+            self.training_keypoint = not self.training_mask
         self.mode = mode
         self.config = config
         self.model_dir = model_dir
@@ -71,11 +76,6 @@ class MaskRCNN:
         self.checkpoint_path = ""
         self.set_log_dir(model_dir)
         self.keras_model = self.build(mode=mode, config=config)
-        self.training_mask = True
-        self.training_keypoint = True
-        if not (config.TRAINING_HEADS is None):
-            self.training_mask = True if config.TRAINING_HEADS == "mask" else False
-            self.training_keypoint = not self.training_mask
 
     def build(self, mode, config):
         """Build Mask R-CNN architecture.
@@ -217,6 +217,9 @@ class MaskRCNN:
             name="ROI",
             config=config)([rpn_class, rpn_bbox, anchors])
 
+        name = "{}{}mrcnn".format("mask_" if self.training_mask else "",
+                                  "keypoint_" if self.training_keypoint else "")
+
         if mode == "training":
             # Class ID mask to mark class IDs supported by the dataset the image
             # came from.
@@ -306,10 +309,16 @@ class MaskRCNN:
             if not config.USE_RPN_ROIS:
                 inputs.append(input_rois)
 
-            outputs = [rpn_class_logits, rpn_class, rpn_bbox, mrcnn_class_logits, mrcnn_class, mrcnn_bbox,
-                       mrcnn_mask, mrcnn_keypoint, rpn_rois, output_rois, rpn_class_loss, rpn_bbox_loss, class_loss,
-                       bbox_loss, keypoint_loss, mask_loss]
-            model = KM.Model(inputs, outputs, name='mask_keypoint_mrcnn')
+            outputs = [rpn_class_logits, rpn_class, rpn_bbox, mrcnn_class_logits, mrcnn_class, mrcnn_bbox, rpn_rois,
+                       output_rois, rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss]
+            if self.training_mask:
+                outputs.append(mrcnn_mask)
+                outputs.append(mask_loss)
+            if self.training_keypoint:
+                outputs.append(mrcnn_keypoint)
+                outputs.append(keypoint_loss)
+
+            model = KM.Model(inputs, outputs, name=name)
         else:
             # Network Heads
             # Proposal classifier and BBox regressor heads
@@ -343,8 +352,7 @@ class MaskRCNN:
                                                           train_bn=config.TRAIN_BN)
                 keypoint_mcrcnn_prob = KL.Activation("softmax", name="mrcnn_prob")(keypoint_mrcnn)
                 detection.append(keypoint_mcrcnn_prob)
-            name = "%s%smrcnn".format("mask_" if self.training_mask else "",
-                                      "keypoint_" if self.training_keypoint else "")
+
             model = KM.Model(inputs, detection, name=name)
 
         # Add multi-GPU support.
@@ -674,7 +682,7 @@ class MaskRCNN:
             log("anchors", anchors)
         # Run object detection
         detections, mrcnn_class, mrcnn_bbox, rpn_rois, rpn_class, rpn_bbox, mrcnn_mask, \
-            keypoint_mcrcnn_prob = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+        keypoint_mcrcnn_prob = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
 
         # Process detections
         results = []
@@ -735,7 +743,7 @@ class MaskRCNN:
 
         # Run human pose detection
         detections, mrcnn_class, mrcnn_bbox, rois, rpn_class, rpn_bbox, mrcnn_mask, \
-            mrcnn_keypoint = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+        mrcnn_keypoint = self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
 
         if verbose:
             log("------ Predictions ----------")

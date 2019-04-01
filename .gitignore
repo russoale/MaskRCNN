@@ -61,3 +61,4 @@ ENV/
 # mscoco
 samples/coco/annotations
 samples/coco/val2017
+samples/coco/train2017
