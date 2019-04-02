@@ -37,7 +37,6 @@ from mrcnn.misc_functions import norm_boxes_graph
 from mrcnn.proposal_layer import ProposalLayer
 from mrcnn.resnet import resnet_graph
 from mrcnn.rpn_layer import build_rpn_model
-from mrcnn.train_val_tensorboard import TrainValTensorBoard
 from mrcnn.utility_functions import log, compute_backbone_shapes
 
 # Requires TensorFlow 1.12+ and Keras 2.2.0+.
@@ -557,8 +556,6 @@ class MaskRCNN:
 
         # Callbacks
         callbacks = [
-            TrainValTensorBoard(log_dir=self.log_dir,
-                                histogram_freq=0, write_graph=True, write_images=False),
             keras.callbacks.TensorBoard(log_dir=self.log_dir,
                                         histogram_freq=0, write_graph=True, write_images=False),
             ModelCheckpointWithOptimizer(self.checkpoint_path,
