@@ -91,7 +91,7 @@ class CocoConfig(Config):
     IMAGES_PER_GPU = 2
 
     # Uncomment to train on 8 GPUs (default is 1)
-    GPU_COUNT = 4
+    GPU_COUNT = 2
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 1  # Person and background
@@ -129,6 +129,8 @@ class CocoConfig(Config):
                 "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"]
 
     LIMBS = [0, -1, -1, 5, -1, 6, 5, 7, 6, 8, 7, 9, 8, 10, 11, 13, 12, 14, 13, 15, 14, 16]
+
+    TRAINING_HEADS = "mask"
 
 
 ############################################################
@@ -740,7 +742,7 @@ if __name__ == '__main__':
         augmentation = FliplrKeypoint(0.5, config=config)
 
         # training phase schedule
-        lr_values = [config.LEARNING_RATE * 2,
+        lr_values = [config.LEARNING_RATE,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
         epochs_values = [40,
