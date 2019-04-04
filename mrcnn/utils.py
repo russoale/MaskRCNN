@@ -347,7 +347,6 @@ def convert_back_bbox(ia_bounding_box, init_bbox):
     """
     bbox = np.zeros(init_bbox.shape, np.int32)
     num_person = init_bbox.shape[0]
-    print("hello")
     for i in range(num_person):
         y1 = ia_bounding_box.bounding_boxes[i].y1
         x1 = ia_bounding_box.bounding_boxes[i].x1

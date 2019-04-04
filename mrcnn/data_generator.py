@@ -545,7 +545,6 @@ class DataGenerator(KU.Sequence):
             assert (self.config.NUM_KEYPOINTS == keypoints.shape[1])
             keypoints = utils.resize_keypoints(keypoints, image.shape[:2], scale, padding)
 
-        print("hello")
         bbox = None
         if self.training_keypoint:
             if hasattr(self.dataset, 'load_bbox'):
