@@ -19,7 +19,7 @@ import skimage.io
 import skimage.transform
 import tensorflow as tf
 import warnings
-from imgaug import Keypoint
+from imgaug import Keypoint, BoundingBox
 
 # URL from which to download the latest COCO trained weights
 COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0/mask_rcnn_coco.h5"
@@ -32,12 +32,12 @@ COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0
 def upsample_filt(size):
     factor = (size + 1) // 2
     if size % 2 == 1:
-
         center = factor - 1
     else:
         center = factor - 0.5
-        og = np.ogrid[:size, :size]
-        return (1 - abs(og[0] - center) / factor) * (1 - abs(og[1] - center) / factor)
+
+    og = np.ogrid[:size, :size]
+    return (1 - abs(og[0] - center) / factor) * (1 - abs(og[1] - center) / factor)
 
 
 def bilinear_upsample_weights(factor, number_of_classes):
@@ -260,6 +260,146 @@ def box_refinement(box, gt_box):
     return np.stack([dy, dx, dh, dw], axis=1)
 
 
+def normalize_bbox(boxes, image_shape, original_image_shape, window):
+    # Translate normalized coordinates in the resized image to pixel
+    # coordinates in the original image before resizing
+    window = norm_boxes(window, image_shape[:2])
+    wy1, wx1, wy2, wx2 = window
+    shift = np.array([wy1, wx1, wy1, wx1])
+    wh = wy2 - wy1  # window height
+    ww = wx2 - wx1  # window width
+    scale = np.array([wh, ww, wh, ww])
+    # Convert boxes to normalized coordinates on the window
+    boxes = np.divide(boxes - shift, scale)
+    # Convert boxes to pixel coordinates on the original image
+    boxes = denorm_boxes(boxes, original_image_shape[:2])
+    return boxes
+
+
+def norm_boxes(boxes, shape):
+    """Converts boxes from pixel coordinates to normalized coordinates.
+    boxes: [N, (y1, x1, y2, x2)] in pixel coordinates
+    shape: [..., (height, width)] in pixels
+
+    Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
+    coordinates it's inside the box.
+
+    Returns:
+        [N, (y1, x1, y2, x2)] in normalized coordinates
+    """
+    h, w = shape
+    scale = np.array([h - 1, w - 1, h - 1, w - 1])
+    shift = np.array([0, 0, 1, 1])
+    return np.divide((boxes - shift), scale).astype(np.float32)
+
+
+def denorm_boxes(boxes, shape):
+    """Converts boxes from normalized coordinates to pixel coordinates.
+    boxes: [N, (y1, x1, y2, x2)] in normalized coordinates
+    shape: [..., (height, width)] in pixels
+
+    Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
+    coordinates it's inside the box.
+
+    Returns:
+        [N, (y1, x1, y2, x2)] in pixel coordinates
+    """
+    h, w = shape
+    scale = np.array([h - 1, w - 1, h - 1, w - 1])
+    shift = np.array([0, 0, 1, 1])
+    return np.around(np.multiply(boxes, scale) + shift).astype(np.int32)
+
+
+def create_bbox(bbox):
+    """Converts bbox into imaug ia.BoundingBox for augmentation
+
+    bbox: Box in (y1,x1,y2,x2) format.
+
+    Returns:
+    ia_bounding_box: [ia.BoundingBox]
+    """
+
+    ia_bounding_box = []
+    bbox_shape = np.shape(bbox)
+    num_person = bbox_shape[0]
+    for i in range(num_person):
+        ia_bounding_box.append(
+            BoundingBox(
+                x1=bbox[i][1],
+                y1=bbox[i][0],
+                x2=bbox[i][3],
+                y2=bbox[i][2]
+            )
+        )
+
+    return ia_bounding_box
+
+
+def convert_back_bbox(ia_bounding_box, init_bbox):
+    """Convert list of BoundingBox back to original bbox shape
+    for correct ground truth calculation
+
+    ia_bounding_box: [ia.BoundingBox]
+    init_bbox: initial bbox in [num_person, (y1,x1,y2,x2)] format
+
+    Returns:
+    bbox: [num_person, (y1,x1,y2,x2)] format
+    """
+    bbox = np.zeros(init_bbox.shape, np.int32)
+    num_person = init_bbox.shape[0]
+    print("hello")
+    for i in range(num_person):
+        y1 = ia_bounding_box.bounding_boxes[i].y1
+        x1 = ia_bounding_box.bounding_boxes[i].x1
+        y2 = ia_bounding_box.bounding_boxes[i].y2
+        x2 = ia_bounding_box.bounding_boxes[i].x2
+        bbox[i] = np.array([y1, x1, y2, x2])
+
+    return bbox.astype(np.int32)
+
+
+def resize_bbox(bbox, new_size, scale, padding):
+    """Resizes a keypoint  using the given scale and padding.
+        Typically, you get the scale and padding from resize_image() to
+        ensure both, the image and the mask, are resized consistently.
+        bbox: [num_person, (y1,x1,y2,x2)]
+        scale: mask scaling factor
+        padding: Padding to add to the mask in the form
+                [(top, bottom), (left, right), (0, 0)]
+        """
+    bbox_shape = np.shape(bbox)
+    num_person = bbox_shape[0]
+    for i in range(num_person):
+        x1 = bbox[i][1]
+        y1 = bbox[i][0]
+        x2 = bbox[i][3]
+        y2 = bbox[i][2]
+
+        # scale
+        x1 = int(x1 * scale + 0.5)
+        x2 = int(x2 * scale + 0.5)
+        y1 = int(y1 * scale + 0.5)
+        y2 = int(y2 * scale + 0.5)
+
+        if (x1 >= new_size[1]):
+            x1 = new_size[1] - 1
+        if (x2 >= new_size[1]):
+            x2 = new_size[1] - 1
+        if (y1 >= new_size[0]):
+            y1 = new_size[0] - 1
+        if (y2 >= new_size[0]):
+            y2 = new_size[0] - 1
+
+        # padding
+        x1 = x1 + padding[1][0]
+        x2 = x2 + padding[1][0]
+        y1 = y1 + padding[0][0]
+        y2 = y2 + padding[0][0]
+        bbox[i] = np.array([y1, x1, y2, x2])
+
+    return bbox
+
+
 ############################################################
 #  Image Helpers
 ############################################################
@@ -372,6 +512,173 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
 
 
 ############################################################
+#  Keypoint and Mask
+############################################################
+
+def unmold_keypoint_mask(mask, bbox, keypoints, image_shape, keypoint_mask_shape=(56, 56),
+                         keypoint_threshold=0.05):
+    """Converts a mask generated by the neural network into a format similar
+    to it's original shape.
+    Input:
+        mask: [height, width, channel] of type float. A small, typically 28x28 mask.
+        bbox: [y1, x1, y2, x2]. The box to fit the mask in.
+        keypoints: [num_keypoints, 56*56] of type float.
+        image_shape: shape of the original image
+        keypoint_mask_shape: shape of the mask computed in the network
+        keypoint_threshold: the threshold for filter the low confident keypoint
+
+    Returns:
+        full_mask: [image_shape[0],image_shape[1], num_keypoints]a  binary mask with the same size as the original image
+        keypoints: [num_keypoints, 3] for (x , y, visibility)
+    """
+
+    full_keypoints = unmold_keypoint(bbox, keypoints, image_shape, keypoint_mask_shape, keypoint_threshold)
+    full_mask = unmold_mask(mask, bbox, image_shape)
+
+    return full_keypoints, full_mask
+
+
+def unmold_mask_keypoint_detections(config, original_image_shape, image_shape, detections,
+                                    window, mrcnn_mask, mrcnn_keypoints):
+    """Reformats the detections of one image from the format of the neural
+    network output to a format suitable for use in the rest of the
+    application.
+
+    detections: [N, (y1, x1, y2, x2, class_id, score)]
+    image_shape: [height, width, depth] Original size of the image before resizing
+    original_image_shape: [H, W, C] Original image shape before resizing
+    window: [y1, x1, y2, x2] Box in the image where the real image is
+            excluding the padding.
+    mrcnn_mask: [N, height, width, num_classes]
+    mrcnn_keypoints: [N, num_keypoints, height*width]
+    keypoint_threshold: defaults to 0.05
+
+    Returns:
+    boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+    class_ids: [N] Integer class IDs for each bounding box
+    scores: [N] Float probability scores of the class_id
+    masks: [height, width, N] Instance masks
+    keypoints:[N, num_keypoints]
+    """
+    # How many detections do we have?
+    # Detections array is padded with zeros. Find the first class_id == 0.
+    zero_ix = np.where(detections[:, 4] == 0)[0]
+    N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
+
+    # Extract boxes, class_ids, scores, class-specific masks and keypoints
+    boxes = detections[:N, :4]
+    class_ids = detections[:N, 4].astype(np.int32)
+    scores = detections[:N, 5]
+    masks = mrcnn_mask[np.arange(N), :, :, class_ids]
+    keypoints = mrcnn_keypoints[:N, :, :]
+
+    boxes = normalize_bbox(boxes, image_shape, original_image_shape, window)
+
+    # Filter out detections with zero area. Often only happens in early
+    # stages of training when the network weights are still a bit random.
+    exclude_ix = np.where(
+        (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
+    if exclude_ix.shape[0] > 0:
+        boxes = np.delete(boxes, exclude_ix, axis=0)
+        class_ids = np.delete(class_ids, exclude_ix, axis=0)
+        scores = np.delete(scores, exclude_ix, axis=0)
+        masks = np.delete(masks, exclude_ix, axis=0)
+        keypoints = np.delete(keypoints, exclude_ix, axis=0)
+        N = class_ids.shape[0]
+
+    # Resize masks to original image size and set boundary threshold.
+    full_masks = []
+    full_keypoints = []
+    for i in range(N):
+        # Convert neural network mask to full size mask
+        detected_kp, detected_mask = unmold_keypoint_mask(masks[i], boxes[i], keypoints[i],
+                                                          original_image_shape,
+                                                          keypoint_mask_shape=config.KEYPOINT_MASK_SHAPE,
+                                                          keypoint_threshold=config.KEYPOINT_THRESHOLD)
+        full_masks.append(detected_mask)
+        full_keypoints.append(detected_kp)
+
+    full_keypoints = np.stack(full_keypoints, axis=0) \
+        if full_keypoints else np.empty((0,) + (keypoints.shape[1], 3))
+    full_masks = np.stack(full_masks, axis=-1) \
+        if full_masks else np.empty(original_image_shape[:2] + (0,))
+
+    return boxes, class_ids, scores, full_masks, full_keypoints
+
+
+# import cv2
+def minimize_keypoint_mask(bbox, keypointmask, mini_shape):
+    """Resize keypoint_mask to a smaller version to cut memory load.
+        Mini-masks can then resized back to image scale using expand_masks()
+
+        See inspect_data.ipynb notebook for more details.
+        """
+    mini_mask = np.zeros(mini_shape + (keypointmask.shape[2], keypointmask.shape[3],), dtype=bool)
+    for i in range(keypointmask.shape[2]):
+        for j in range(keypointmask.shape[3]):
+            m = keypointmask[:, :, i, j]
+            y1, x1, y2, x2 = bbox[i][:4]
+            m = m[y1:y2, x1:x2]
+            if m.size == 0:
+                raise Exception("Invalid bounding box with area of zero")
+            if m.sum() == 0:
+                mini_mask[0, 0, i, j] = 1
+                # mini_mask = mini_mask
+            else:
+                cordys, cordxs = np.where(m == np.max(m))
+                scale = np.asarray(mini_shape).astype(float) / m.shape
+                cordys = (cordys * scale[0] + 0.5).astype(int)
+                cordxs = (cordxs * scale[1] + 0.5).astype(int)
+                cordys[cordys >= mini_shape[0]] = mini_shape[0] - 1
+                cordxs[cordxs >= mini_shape[1]] = mini_shape[1] - 1
+                final_y = np.mean(cordys).astype(int)
+                final_x = np.mean(cordxs).astype(int)
+                mini_mask[final_y, final_x, i, j] = 1
+                # scale = np.asarray(mini_shape) / m.shape
+                # cord = np.where(m == int(m.max()))
+                # new_cord = np.array([cord[0] * scale[0], cord[1] * scale[1]], dtype=np.int32).reshape(2, )
+                # mini_mask[new_cord[0], new_cord[1], i,j] = 1
+    return mini_mask
+
+
+def expand_keypoint_mask(bbox, mini_mask, image_shape):
+    """Resizes mini keypoint masks back to image size. Reverses the change
+        of minimize_mask().
+
+        See inspect_data.ipynb notebook for more details.
+        """
+    keypoint_mask = np.zeros(image_shape[:2] + (mini_mask.shape[2], mini_mask.shape[3]))
+
+    for i in range(keypoint_mask.shape[2]):
+        for j in range(keypoint_mask.shape[3]):
+            m = mini_mask[:, :, i, j]
+            y1, x1, y2, x2 = bbox[i][:4]
+
+            h = y2 - y1
+            w = x2 - x1
+            result = np.sum(m)
+            if result:
+                cordys, cordxs = np.where(m == np.max(m))
+                scale = np.asarray([h, w]).astype(float) / m.shape
+                cordys = (cordys * scale[0] + 0.5).astype(int)
+                cordxs = (cordxs * scale[1] + 0.5).astype(int)
+
+                cordys[cordys >= h] = h - 1
+                cordxs[cordxs >= w] = w - 1
+                m = np.zeros(np.asarray([h, w]).astype(int), dtype=bool)
+                # print("m shape:", np.shape(m))
+                final_y = np.mean(cordys).astype(int)
+                final_x = np.mean(cordxs).astype(int)
+                m[final_y, final_x] = 1
+            else:
+                m = np.zeros([h, w])
+
+            keypoint_mask[y1:y2, x1:x2, i, j] = m
+
+    return keypoint_mask
+
+
+############################################################
 #  Mask
 ############################################################
 
@@ -459,6 +766,61 @@ def unmold_mask(mask, bbox, image_shape):
     return full_mask
 
 
+def unmold_mask_detections(detections, mrcnn_mask, original_image_shape,
+                           image_shape, window):
+    """Reformats the detections of one image from the format of the neural
+    network output to a format suitable for use in the rest of the
+    application.
+
+    detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
+    mrcnn_mask: [N, height, width, num_classes]
+    original_image_shape: [H, W, C] Original image shape before resizing
+    image_shape: [H, W, C] Shape of the image after resizing and padding
+    window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
+            image is excluding the padding.
+
+    Returns:
+    boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+    class_ids: [N] Integer class IDs for each bounding box
+    scores: [N] Float probability scores of the class_id
+    masks: [height, width, num_instances] Instance masks
+    """
+    # How many detections do we have?
+    # Detections array is padded with zeros. Find the first class_id == 0.
+    zero_ix = np.where(detections[:, 4] == 0)[0]
+    N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
+
+    # Extract boxes, class_ids, scores, and class-specific masks
+    boxes = detections[:N, :4]
+    class_ids = detections[:N, 4].astype(np.int32)
+    scores = detections[:N, 5]
+    masks = mrcnn_mask[np.arange(N), :, :, class_ids]
+
+    boxes = normalize_bbox(boxes, image_shape, original_image_shape, window)
+
+    # Filter out detections with zero area. Happens in early training when
+    # network weights are still random
+    exclude_ix = np.where(
+        (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
+    if exclude_ix.shape[0] > 0:
+        boxes = np.delete(boxes, exclude_ix, axis=0)
+        class_ids = np.delete(class_ids, exclude_ix, axis=0)
+        scores = np.delete(scores, exclude_ix, axis=0)
+        masks = np.delete(masks, exclude_ix, axis=0)
+        N = class_ids.shape[0]
+
+    # Resize masks to original image size and set boundary threshold.
+    full_masks = []
+    for i in range(N):
+        # Convert neural network mask to full size mask
+        full_mask = unmold_mask(masks[i], boxes[i], original_image_shape)
+        full_masks.append(full_mask)
+    full_masks = np.stack(full_masks, axis=-1) \
+        if full_masks else np.empty(original_image_shape[:2] + (0,))
+
+    return boxes, class_ids, scores, full_masks
+
+
 ############################################################
 #  Keypoints
 ############################################################
@@ -485,7 +847,7 @@ def keypoint_to_mask(keypoints, height, width):
         for j in range(shape[1]):
             J = keypoints[i, j]
             # print(J)
-            if (J[2]):
+            if J[2]:
                 keypoint_mask[J[1], J[0], i, j] = 1
             keypoint_weight[i, j] = J[2]
     # keypoint_mask = np.reshape(keypoint_mask,[height,width,-1])
@@ -521,7 +883,7 @@ def create_keypoints(keypoint):
     return ia_keypoint
 
 
-def convert_back(ia_keypoints, init_keypoints):
+def convert_back_keypoint(ia_keypoints, init_keypoints):
     """Convert list of KeypointVisLabel back to original keypoint shape
     for correct ground truth calculation
 
@@ -638,93 +1000,16 @@ def resize_keypoints(keypoint, new_size, scale, padding):
     return keypoint
 
 
-# import cv2
-def minimize_keypoint_mask(bbox, keypointmask, mini_shape):
-    """Resize keypoint_mask to a smaller version to cut memory load.
-        Mini-masks can then resized back to image scale using expand_masks()
-
-        See inspect_data.ipynb notebook for more details.
-        """
-    mini_mask = np.zeros(mini_shape + (keypointmask.shape[2], keypointmask.shape[3],), dtype=bool)
-    for i in range(keypointmask.shape[2]):
-        for j in range(keypointmask.shape[3]):
-            m = keypointmask[:, :, i, j]
-            y1, x1, y2, x2 = bbox[i][:4]
-            m = m[y1:y2, x1:x2]
-            if m.size == 0:
-                raise Exception("Invalid bounding box with area of zero")
-            if m.sum() == 0:
-                mini_mask[0, 0, i, j] = 1
-                # mini_mask = mini_mask
-            else:
-                scale = np.asarray(mini_shape).astype(float) / m.shape
-                cordys, cordxs = np.where(m == np.max(m))
-                scale = np.asarray(mini_shape).astype(float) / m.shape
-                cordys = (cordys * scale[0] + 0.5).astype(int)
-                cordxs = (cordxs * scale[1] + 0.5).astype(int)
-                cordys[cordys >= mini_shape[0]] = mini_shape[0] - 1
-                cordxs[cordxs >= mini_shape[1]] = mini_shape[1] - 1
-                final_y = np.mean(cordys).astype(int)
-                final_x = np.mean(cordxs).astype(int)
-                mini_mask[final_y, final_x, i, j] = 1
-                # scale = np.asarray(mini_shape) / m.shape
-                # cord = np.where(m == int(m.max()))
-                # new_cord = np.array([cord[0] * scale[0], cord[1] * scale[1]], dtype=np.int32).reshape(2, )
-                # mini_mask[new_cord[0], new_cord[1], i,j] = 1
-    return mini_mask
-
-
-def expand_keypoint_mask(bbox, mini_mask, image_shape):
-    """Resizes mini keypoint masks back to image size. Reverses the change
-        of minimize_mask().
-
-        See inspect_data.ipynb notebook for more details.
-        """
-    keypoint_mask = np.zeros(image_shape[:2] + (mini_mask.shape[2], mini_mask.shape[3]))
-
-    for i in range(keypoint_mask.shape[2]):
-        for j in range(keypoint_mask.shape[3]):
-            m = mini_mask[:, :, i, j]
-            y1, x1, y2, x2 = bbox[i][:4]
-
-            h = y2 - y1
-            w = x2 - x1
-            result = np.sum(m)
-            if (result):
-                cordys, cordxs = np.where(m == np.max(m))
-                scale = np.asarray([h, w]).astype(float) / m.shape
-                cordys = (cordys * scale[0] + 0.5).astype(int)
-                cordxs = (cordxs * scale[1] + 0.5).astype(int)
-
-                cordys[cordys >= h] = h - 1
-                cordxs[cordxs >= w] = w - 1
-                m = np.zeros(np.asarray([h, w]).astype(int), dtype=bool)
-                # print("m shape:", np.shape(m))
-                final_y = np.mean(cordys).astype(int)
-                final_x = np.mean(cordxs).astype(int)
-                m[final_y, final_x] = 1
-            else:
-                m = np.zeros([h, w])
-
-            keypoint_mask[y1:y2, x1:x2, i, j] = m
-
-    return keypoint_mask
-
-
-def unmold_keypoint_mask(mask, bbox, keypoints, image_shape, keypoint_mask_shape=(56, 56),
-                         keypoint_threshold=0.05):
+def unmold_keypoint(bbox, keypoints, keypoint_mask_shape=(56, 56), keypoint_threshold=0.05):
     """Converts a mask generated by the neural network into a format similar
     to it's original shape.
     Input:
-        mask: [height, width, channel] of type float. A small, typically 28x28 mask.
         bbox: [y1, x1, y2, x2]. The box to fit the mask in.
         keypoints: [num_keypoints, 56*56] of type float.
-        image_shape: shape of the original image
         keypoint_mask_shape: shape of the mask computed in the network
         keypoint_threshold: the threshold for filter the low confident keypoint
 
     Returns:
-        full_mask: [image_shape[0],image_shape[1], num_keypoints]a  binary mask with the same size as the original image.
         keypoints: [num_keypoints, 3] for (x , y, visibility)
     """
 
@@ -749,80 +1034,11 @@ def unmold_keypoint_mask(mask, bbox, keypoints, image_shape, keypoint_mask_shape
 
     full_keypoints = np.stack([J_x, J_y, J_vis], axis=1)
 
-    # convert mask back to original input image shape
-    full_mask = unmold_mask(mask, bbox, image_shape)
-
-    return full_keypoints, full_mask
-
-
-def unmold_detections(detections, mrcnn_mask, original_image_shape,
-                      image_shape, window):
-    """Reformats the detections of one image from the format of the neural
-    network output to a format suitable for use in the rest of the
-    application.
-
-    detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
-    mrcnn_mask: [N, height, width, num_classes]
-    original_image_shape: [H, W, C] Original image shape before resizing
-    image_shape: [H, W, C] Shape of the image after resizing and padding
-    window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
-            image is excluding the padding.
-
-    Returns:
-    boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
-    class_ids: [N] Integer class IDs for each bounding box
-    scores: [N] Float probability scores of the class_id
-    masks: [height, width, num_instances] Instance masks
-    """
-    # How many detections do we have?
-    # Detections array is padded with zeros. Find the first class_id == 0.
-    zero_ix = np.where(detections[:, 4] == 0)[0]
-    N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
-
-    # Extract boxes, class_ids, scores, and class-specific masks
-    boxes = detections[:N, :4]
-    class_ids = detections[:N, 4].astype(np.int32)
-    scores = detections[:N, 5]
-    masks = mrcnn_mask[np.arange(N), :, :, class_ids]
-
-    # Translate normalized coordinates in the resized image to pixel
-    # coordinates in the original image before resizing
-    window = norm_boxes(window, image_shape[:2])
-    wy1, wx1, wy2, wx2 = window
-    shift = np.array([wy1, wx1, wy1, wx1])
-    wh = wy2 - wy1  # window height
-    ww = wx2 - wx1  # window width
-    scale = np.array([wh, ww, wh, ww])
-    # Convert boxes to normalized coordinates on the window
-    boxes = np.divide(boxes - shift, scale)
-    # Convert boxes to pixel coordinates on the original image
-    boxes = denorm_boxes(boxes, original_image_shape[:2])
-
-    # Filter out detections with zero area. Happens in early training when
-    # network weights are still random
-    exclude_ix = np.where(
-        (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
-    if exclude_ix.shape[0] > 0:
-        boxes = np.delete(boxes, exclude_ix, axis=0)
-        class_ids = np.delete(class_ids, exclude_ix, axis=0)
-        scores = np.delete(scores, exclude_ix, axis=0)
-        masks = np.delete(masks, exclude_ix, axis=0)
-        N = class_ids.shape[0]
-
-    # Resize masks to original image size and set boundary threshold.
-    full_masks = []
-    for i in range(N):
-        # Convert neural network mask to full size mask
-        full_mask = unmold_mask(masks[i], boxes[i], original_image_shape)
-        full_masks.append(full_mask)
-    full_masks = np.stack(full_masks, axis=-1) \
-        if full_masks else np.empty(original_image_shape[:2] + (0,))
-
-    return boxes, class_ids, scores, full_masks
+    return full_keypoints
 
 
 def unmold_keypoint_detections(config, original_image_shape, image_shape, detections,
-                               window, mrcnn_mask, mrcnn_keypoints):
+                               window, mrcnn_keypoints):
     """Reformats the detections of one image from the format of the neural
     network output to a format suitable for use in the rest of the
     application.
@@ -832,7 +1048,6 @@ def unmold_keypoint_detections(config, original_image_shape, image_shape, detect
     original_image_shape: [H, W, C] Original image shape before resizing
     window: [y1, x1, y2, x2] Box in the image where the real image is
             excluding the padding.
-    mrcnn_mask: [N, height, width, num_classes]
     mrcnn_keypoints: [N, num_keypoints, height*width]
     keypoint_threshold: defaults to 0.05
 
@@ -840,7 +1055,6 @@ def unmold_keypoint_detections(config, original_image_shape, image_shape, detect
     boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
     class_ids: [N] Integer class IDs for each bounding box
     scores: [N] Float probability scores of the class_id
-    masks: [height, width, N] Instance masks
     keypoints:[N, num_keypoints]
     """
     # How many detections do we have?
@@ -852,21 +1066,9 @@ def unmold_keypoint_detections(config, original_image_shape, image_shape, detect
     boxes = detections[:N, :4]
     class_ids = detections[:N, 4].astype(np.int32)
     scores = detections[:N, 5]
-    masks = mrcnn_mask[np.arange(N), :, :, class_ids]
     keypoints = mrcnn_keypoints[:N, :, :]
 
-    # Translate normalized coordinates in the resized image to pixel
-    # coordinates in the original image before resizing
-    window = norm_boxes(window, image_shape[:2])
-    wy1, wx1, wy2, wx2 = window
-    shift = np.array([wy1, wx1, wy1, wx1])
-    wh = wy2 - wy1  # window height
-    ww = wx2 - wx1  # window width
-    scale = np.array([wh, ww, wh, ww])
-    # Convert boxes to normalized coordinates on the window
-    boxes = np.divide(boxes - shift, scale)
-    # Convert boxes to pixel coordinates on the original image
-    boxes = denorm_boxes(boxes, original_image_shape[:2])
+    boxes = normalize_bbox(boxes, image_shape, original_image_shape, window)
 
     # Filter out detections with zero area. Often only happens in early
     # stages of training when the network weights are still a bit random.
@@ -876,28 +1078,22 @@ def unmold_keypoint_detections(config, original_image_shape, image_shape, detect
         boxes = np.delete(boxes, exclude_ix, axis=0)
         class_ids = np.delete(class_ids, exclude_ix, axis=0)
         scores = np.delete(scores, exclude_ix, axis=0)
-        masks = np.delete(masks, exclude_ix, axis=0)
         keypoints = np.delete(keypoints, exclude_ix, axis=0)
         N = class_ids.shape[0]
 
     # Resize masks to original image size and set boundary threshold.
-    full_masks = []
     full_keypoints = []
     for i in range(N):
         # Convert neural network mask to full size mask
-        detected_kp, detected_mask = unmold_keypoint_mask(masks[i], boxes[i], keypoints[i],
-                                                          original_image_shape,
-                                                          keypoint_mask_shape=config.KEYPOINT_MASK_SHAPE,
-                                                          keypoint_threshold=config.KEYPOINT_THRESHOLD)
-        full_masks.append(detected_mask)
+        detected_kp = unmold_keypoint(boxes[i], keypoints[i],
+                                      keypoint_mask_shape=config.KEYPOINT_MASK_SHAPE,
+                                      keypoint_threshold=config.KEYPOINT_THRESHOLD)
         full_keypoints.append(detected_kp)
 
     full_keypoints = np.stack(full_keypoints, axis=0) \
         if full_keypoints else np.empty((0,) + (keypoints.shape[1], 3))
-    full_masks = np.stack(full_masks, axis=-1) \
-        if full_masks else np.empty(original_image_shape[:2] + (0,))
 
-    return boxes, class_ids, scores, full_masks, full_keypoints
+    return boxes, class_ids, scores, full_keypoints
 
 
 ############################################################
@@ -1239,40 +1435,6 @@ def get_imagenet_weights():
                             cache_subdir='models',
                             md5_hash='a268eb855778b3df3c7506639542a6af')
     return weights_path
-
-
-def norm_boxes(boxes, shape):
-    """Converts boxes from pixel coordinates to normalized coordinates.
-    boxes: [N, (y1, x1, y2, x2)] in pixel coordinates
-    shape: [..., (height, width)] in pixels
-
-    Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
-    coordinates it's inside the box.
-
-    Returns:
-        [N, (y1, x1, y2, x2)] in normalized coordinates
-    """
-    h, w = shape
-    scale = np.array([h - 1, w - 1, h - 1, w - 1])
-    shift = np.array([0, 0, 1, 1])
-    return np.divide((boxes - shift), scale).astype(np.float32)
-
-
-def denorm_boxes(boxes, shape):
-    """Converts boxes from normalized coordinates to pixel coordinates.
-    boxes: [N, (y1, x1, y2, x2)] in normalized coordinates
-    shape: [..., (height, width)] in pixels
-
-    Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
-    coordinates it's inside the box.
-
-    Returns:
-        [N, (y1, x1, y2, x2)] in pixel coordinates
-    """
-    h, w = shape
-    scale = np.array([h - 1, w - 1, h - 1, w - 1])
-    shift = np.array([0, 0, 1, 1])
-    return np.around(np.multiply(boxes, scale) + shift).astype(np.int32)
 
 
 def resize(image, output_shape, order=1, mode='constant', cval=0, clip=True,

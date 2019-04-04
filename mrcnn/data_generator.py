@@ -545,6 +545,16 @@ class DataGenerator(KU.Sequence):
             assert (self.config.NUM_KEYPOINTS == keypoints.shape[1])
             keypoints = utils.resize_keypoints(keypoints, image.shape[:2], scale, padding)
 
+        print("hello")
+        bbox = None
+        if self.training_keypoint:
+            if hasattr(self.dataset, 'load_bbox'):
+                bbox = self.dataset.load_bbox(image_id)
+            else:
+                bbox = self.dataset.get_bbox_from_keypoints(keypoints, image.shape)
+
+            bbox = utils.resize_bbox(bbox, image.shape[:2], scale, padding)
+
         mask = None
         if self.training_mask:
             mask, class_ids = self.dataset.load_mask(image_id)
@@ -589,8 +599,17 @@ class DataGenerator(KU.Sequence):
                 if ia_keypoints:
                     ia_keypoints = ia.KeypointsOnImage(ia_keypoints, shape=image_shape)
                     ia_keypoints = det.augment_keypoints([ia_keypoints], hooks=hooks)[0]
-                    keypoints = utils.convert_back(ia_keypoints, keypoints)
+                    keypoints = utils.convert_back_keypoint(ia_keypoints, keypoints)
                 assert keypoints.shape == keypoint_shape, "Augmentation shouldn't change keypoints size"
+
+            if not (bbox is None):
+                bbox_shape = bbox.shape
+                ia_bounding_box = utils.create_bbox(bbox)
+                if ia_bounding_box:
+                    ia_bounding_box = ia.BoundingBoxesOnImage(ia_bounding_box, shape=image.shape)
+                    ia_bounding_box = det.augment_bounding_boxes([ia_bounding_box], hooks=hooks)[0]
+                    bbox = utils.convert_back_bbox(ia_bounding_box, bbox)
+                assert bbox.shape == bbox_shape, "Augmentation shouldn't change bbox size"
 
         if self.training_mask:
             # Note that some boxes might be all zeros if the corresponding mask got cropped out.
@@ -605,11 +624,6 @@ class DataGenerator(KU.Sequence):
             # print("mask shape:",np.shape(mask))
             # print("keypoint mask shape:",np.shape(keypoint_mask))
             bbox = utils.extract_bboxes(mask)
-        elif self.training_keypoint:
-            if hasattr(self.dataset, 'load_bbox'):
-                bbox = self.dataset.load_bbox(image_id)
-            else:
-                bbox = self.dataset.get_bbox_from_keypoints(keypoints, image.shape)
 
         # Active classes
         # Different datasets have different classes, so track the

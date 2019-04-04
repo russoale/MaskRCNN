@@ -40,6 +40,10 @@ class FliplrKeypoint(flip.Fliplr):
                 for keypoint in keypoints_per_image.keypoints:
                     keypoint.x = (width - 1) - keypoint.x
 
+                # skip if bbox (imgaug uses _augment_keypoints internally for bbox)
+                if (len(keypoints_per_image.keypoints) % self.config.NUM_KEYPOINTS) != 0:
+                    continue
+
                 keypoints_on_image_copy = copy.deepcopy(keypoints_on_images)
                 for j, _ in enumerate(range(0, len(keypoints_per_image.keypoints), self.config.NUM_KEYPOINTS)):
                     for lkp, rkp in keypoint_flip_map.items():

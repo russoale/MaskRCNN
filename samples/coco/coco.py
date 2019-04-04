@@ -61,8 +61,15 @@ from mrcnn.load_weights import load_weights
 from mrcnn.augmenter import FliplrKeypoint
 
 # Local path to trained weights file
+
+# mask only
+#COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "coco20190402T2205", "mask_rcnn_coco_0160.h5")
+
+# keypoint only
+#COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "coco20190402T2204", "mask_rcnn_coco_0160.h5")
+
+# keypoint and mask
 COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_rcnn_coco_0160.h5")
-# COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "coco20190111T1814", "mask_rcnn_coco_0028.h5")
 
 # path to MSCOCO dataset
 COCO_DIR = os.path.join(DATA_DIR, "Datasets", "MSCOCO_2017")  # TODO: enter value here
