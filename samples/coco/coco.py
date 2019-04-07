@@ -63,20 +63,21 @@ from mrcnn.augmenter import FliplrKeypoint
 # Local path to trained weights file
 
 # mask only
-#COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "coco20190402T2205", "mask_rcnn_coco_0160.h5")
+COCO_MODEL_PATH_MASK = os.path.join(DATA_DIR, "russales", "logs", "coco20190402T2205", "mask_rcnn_coco_0160.h5")
 
 # keypoint only
-#COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "coco20190402T2204", "mask_rcnn_coco_0160.h5")
+COCO_MODEL_PATH_KEYPOINT = os.path.join(DATA_DIR, "russales", "logs", "coco20190404T2343", "mask_rcnn_coco_0160.h5")
 
 # keypoint and mask
 COCO_MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_rcnn_coco_0160.h5")
 
 # path to MSCOCO dataset
-COCO_DIR = os.path.join(DATA_DIR, "Datasets", "MSCOCO_2017")  # TODO: enter value here
+COCO_DIR = os.path.join(DATA_DIR, "Datasets", "MSCOCO_2017")
 
-# Directory to save logs and model checkpoints, if not provided
-# through the command line argument --logs
+# Directory to save logs and model checkpoints, if not provided through the command line argument --logs
 DEFAULT_LOGS_DIR = os.path.join(DATA_DIR, "russales", "logs")
+
+# Dataset default year, if not provided through the command line argument --logs
 DEFAULT_DATASET_YEAR = "2017"
 
 
@@ -136,6 +137,8 @@ class CocoConfig(Config):
                 "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"]
 
     LIMBS = [0, -1, -1, 5, -1, 6, 5, 7, 6, 8, 7, 9, 8, 10, 11, 13, 12, 14, 13, 15, 14, 16]
+
+    TRAINING_HEADS = None
 
 
 ############################################################
@@ -537,12 +540,24 @@ class CocoDataset(dataset.Dataset):
 #  COCO Evaluation
 ############################################################
 
-def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks, keypoints):
-    """Arrange resutls to match COCO specs in http://cocodataset.org/#format
-    """
+def build_coco_results(dataset, image_ids, result):
+    # Arrange resutls to match COCO specs in http://cocodataset.org/#format
     # If no results, return an empty list
-    if rois is None:
+
+    if result["bboxes"] is None:
         return []
+
+    rois = result["bboxes"]
+    class_ids = result["class_ids"]
+    scores = result["scores"]
+    masks = None
+    keypoints = None
+
+    if "masks" in result:
+        masks = result["masks"].astype(np.uint8)
+
+    if "keypoints" in result:
+        keypoints = result["keypoints"]
 
     results = []
     for image_id in image_ids:
@@ -551,22 +566,26 @@ def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks, keypo
             class_id = class_ids[i]
             score = scores[i]
             bbox = np.around(rois[i], 1)
-            mask = masks[:, :, i]
-            keypoint = keypoints[i, :, :].flatten().tolist()
 
             result = {
                 "image_id": image_id,
                 "category_id": dataset.get_source_class_id(class_id, "coco"),
                 "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
-                "score": score,
-                "segmentation": maskUtils.encode(np.asfortranarray(mask)),
-                "keypoints": keypoint
+                "score": score
             }
+
+            if masks is not None:
+                mask = masks[:, :, i]
+                result["segmentation"] = maskUtils.encode(np.asfortranarray(mask))
+            if keypoints is not None:
+                keypoint = keypoints[i, :, :].flatten().tolist()
+                result["keypoints"] = keypoint
+
             results.append(result)
     return results
 
 
-def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=None):
+def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=None, training_heads=None):
     """Runs official COCO evaluation.
     dataset: A Dataset object with valiadtion data
     eval_type: 'segm', 'bbox', 'keypoints' for evaluation
@@ -600,19 +619,18 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
 
         # Run detection
         t = time.time()
-        r = model.detect_keypoint([image], verbose=0)[0]
-        # r = model.detect([image], verbose=0)[0]
+        if training_heads == "keypoint":
+            r = model.detect_keypoint([image], verbose=0)[0]
+        elif training_heads == "mask":
+            r = model.detect_mask([image], verbose=0)[0]
+        else:
+            r = model.detect([image], verbose=0)[0]
+
         t_prediction += (time.time() - t)
 
         # Convert results to COCO format
         # Cast masks to uint8 because COCO tools errors out on bool
-        image_results = build_coco_results(dataset,
-                                           coco_image_ids[i:i + 1],
-                                           r["bboxes"],
-                                           r["class_ids"],
-                                           r["scores"],
-                                           r["masks"].astype(np.uint8),
-                                           r["keypoints"])
+        image_results = build_coco_results(dataset, coco_image_ids[i:i + 1], r)
         results.extend(image_results)
 
     # Load results. This modifies results with additional attributes.
@@ -654,8 +672,8 @@ if __name__ == '__main__':
                         help='Year of the MS-COCO dataset (2014 or 2017) (default=2017)')
     parser.add_argument('--model', required=False,
                         default=COCO_MODEL_PATH,
-                        metavar="/path/to/weights.h5",
-                        help="Path to weights .h5 file or 'coco', 'last', 'imagenet' (default='coco'")
+                        metavar="<'/path/to/weights.h5'|'keypoint'|'mask'|'imagenet'>",
+                        help="Path to weights .h5 file (default = keypoint & mask weights)")
     parser.add_argument('--logs', required=False,
                         default=DEFAULT_LOGS_DIR,
                         metavar="/path/to/logs/",
@@ -669,6 +687,10 @@ if __name__ == '__main__':
                         metavar="<True|False>",
                         help='Automatically download and unzip MS-COCO files (default=False)',
                         type=bool)
+    parser.add_argument('--training_heads', required=False,
+                        default=None,
+                        metavar="<'keypoint'|'mask'>",
+                        help='Specify which head networks to train or evaluate (default=None, trains all)')
     parser.add_argument('--keypoint', required=False,
                         default=True,
                         metavar="<True|False>",
@@ -691,31 +713,29 @@ if __name__ == '__main__':
     print("Year: ", args.year)
     print("Logs: ", args.logs)
     print("Auto Download: ", args.download)
+    print("Training Heads: ", args.training_heads)
     print("Keypoint: ", args.keypoint)
     print("Continue Training: ", args.continue_training)
     print("Limit: ", args.limit)
     print("Eval Type: ", args.eval_type)
 
     # Select weights file to load
-    if args.model.lower() == "coco":
-        model_path = args.model
-    elif args.model.lower() == "imagenet":
+    model_path = args.model
+    if args.model.lower() == "imagenet":
         # Start from ImageNet trained weights
         model_path = utils.get_imagenet_weights()
-    else:
-        model_path = args.model
 
     # select task type
-    if args.keypoint:
-        task_type = "person_keypoints"
-    else:
-        task_type = "instances"
+    task_type = "person_keypoints" if args.keypoint else "instaces"
 
     # Train or evaluate
     if args.command == "train":
         config = CocoConfig()
         config.display()
         model = modellib.MaskRCNN(mode="training", config=config, model_dir=args.logs)
+
+        # Training Heads
+        config.TRAINING_HEADS = args.training_heads
 
         # Training dataset. Use the training set and 35K from the
         # validation set, as as in the Mask RCNN paper.
@@ -803,6 +823,8 @@ if __name__ == '__main__':
 
 
         config = InferenceConfig()
+        # Training Heads
+        config.TRAINING_HEADS = args.training_heads
         config.display()
 
         # Validation dataset
@@ -821,7 +843,8 @@ if __name__ == '__main__':
         load_weights(model, model_path, by_name=True, include_optimizer=False)
 
         print("Start evaluation..")
-        evaluate_coco(model, dataset_val, coco, args.eval_type, limit=int(args.limit))
+        evaluate_coco(model, dataset_val, coco, args.eval_type, limit=int(args.limit),
+                      training_heads=args.training_heads)
 
     else:
         print("'{}' is not recognized. "
