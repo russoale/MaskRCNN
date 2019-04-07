@@ -193,28 +193,37 @@ class Dataset(object):
         class_ids = np.empty([0], np.int32)
         return keypoints, mask, class_ids
 
-    def load_bbox(self, image_id):
-        """Load instance bounding box for the given image.
+    # IMPLEMENT ONE OF THE FOLLOWING FUNCTIONS TO GENERATE BBOX
+    # def load_bbox(self, image_id):
+    #     """Load instance bounding box for the given image.
+    #
+    #     Different datasets use different ways to store bbox. Override this
+    #     method to load bbox and return them in the form of an
+    #     array of coordinate(x,y) of shape [4].
+    #
+    #     Returns:
+    #     bbox: Box in (y1,x1,y2,x2) format.
+    #     """
+    #     bbox = np.empty([0])
+    #     return bbox
+    #
+    # def get_bbox_from_keypoints(self, keypoints, image_shape):
+    #     """Load bounding box from keypoints for the given image (shape).
+    #
+    #     Some dataset do not have bounding box annotations nor mask annotations
+    #     Override this method to support bounding box extraction given
+    #     a set of keypoints. Return them in the form of am
+    #     array of coordinate(y_top, x_top, y_bot, x_bot)
+    #
+    #     Returns:
+    #         Box in (y1,x1,y2,x2) format.
+    #     """
+    #     return np.empty([0])
 
-        Different datasets use different ways to store bbox. Override this
-        method to load bbox and return them in the form of an
-        array of coordinate(x,y) of shape [4].
-
-        Returns:
-        bbox: Box in (y1,x1,y2,x2) format.
-        """
-        bbox = np.empty([0])
-        return bbox
-
-    def get_bbox_from_keypoints(self, keypoints, image_shape):
-        """Load bounding box from keypoints for the given image (shape).
-
-        Some dataset do not have bounding box annotations nor mask annotations
-        Override this method to support bounding box extraction given
-        a set of keypoints. Return them in the form of am
-        array of coordinate(y_top, x_top, y_bot, x_bot)
-
-        Returns:
-            Box in (y1,x1,y2,x2) format.
-        """
-        return np.empty([0])
+    def get_keypoints(self):
+        """Get the COCO keypoints and their left/right flip coorespondence map."""
+        # Keypoints are not available in the COCO json for the test split, so we
+        # provide them here.
+        keypoints = []
+        keypoint_flip_map = {}
+        return keypoints, keypoint_flip_map

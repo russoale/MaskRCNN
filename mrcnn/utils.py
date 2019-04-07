@@ -347,7 +347,6 @@ def convert_back_bbox(ia_bounding_box, init_bbox):
     """
     bbox = np.zeros(init_bbox.shape, np.int32)
     num_person = init_bbox.shape[0]
-    print("hello")
     for i in range(num_person):
         y1 = ia_bounding_box.bounding_boxes[i].y1
         x1 = ia_bounding_box.bounding_boxes[i].x1
@@ -855,10 +854,11 @@ def keypoint_to_mask(keypoints, height, width):
     return keypoint_mask, keypoint_weight
 
 
-def create_keypoints(keypoint):
+def create_keypoints(keypoint, dataset):
     """Converts keypoints into imaug ia.Keypoint for augmentation
 
     keypoint: [N, num_keypoints, [x, y, vis]]
+    dataset: for keypoint mapping
 
     Returns:
     ia_keypoints: [ia.Keypoints]
@@ -868,7 +868,7 @@ def create_keypoints(keypoint):
     keypoint_shape = np.shape(keypoint)
     num_person = keypoint_shape[0]
     num_keypoint = keypoint_shape[1]
-    label_list, _ = get_keypoints()
+    label_list, _ = dataset.get_keypoints()
     for i in range(num_person):
         for j in range(num_keypoint):
             ia_keypoint.append(
@@ -883,12 +883,13 @@ def create_keypoints(keypoint):
     return ia_keypoint
 
 
-def convert_back_keypoint(ia_keypoints, init_keypoints):
+def convert_back_keypoint(ia_keypoints, init_keypoints, dataset):
     """Convert list of KeypointVisLabel back to original keypoint shape
     for correct ground truth calculation
 
     ia_keypoints: [ia.Keypoints]
     init_keypoints: initial keypoint of shape [N, num_keypoints, [x, y, vis]]
+    dataset: for keypoint mapping
 
     Returns:
     keypoints: [N, num_keypoints, [x, y, vis]]
@@ -896,7 +897,7 @@ def convert_back_keypoint(ia_keypoints, init_keypoints):
     keypoints = np.zeros(init_keypoints.shape, np.int16)
     num_person = init_keypoints.shape[0]
     num_keypoint = init_keypoints.shape[1]
-    keypoints_order, _ = get_keypoints()
+    keypoints_order, _ = dataset.get_keypoints()
 
     for i in range(num_person):
         for j in range(num_keypoint):
@@ -908,42 +909,6 @@ def convert_back_keypoint(ia_keypoints, init_keypoints):
             keypoints[i, label_idx, 2] = kp.vis
 
     return keypoints
-
-
-def get_keypoints():
-    """Get the COCO keypoints and their left/right flip coorespondence map."""
-    # Keypoints are not available in the COCO json for the test split, so we
-    # provide them here.
-    keypoints = [
-        'nose',
-        'left_eye',
-        'right_eye',
-        'left_ear',
-        'right_ear',
-        'left_shoulder',
-        'right_shoulder',
-        'left_elbow',
-        'right_elbow',
-        'left_wrist',
-        'right_wrist',
-        'left_hip',
-        'right_hip',
-        'left_knee',
-        'right_knee',
-        'left_ankle',
-        'right_ankle'
-    ]
-    keypoint_flip_map = {
-        'left_eye': 'right_eye',
-        'left_ear': 'right_ear',
-        'left_shoulder': 'right_shoulder',
-        'left_elbow': 'right_elbow',
-        'left_wrist': 'right_wrist',
-        'left_hip': 'right_hip',
-        'left_knee': 'right_knee',
-        'left_ankle': 'right_ankle'
-    }
-    return keypoints, keypoint_flip_map
 
 
 def flip_keypoints(keypoints, keypoint_flip_map, keypoint_coords, width):

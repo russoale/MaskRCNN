@@ -420,6 +420,38 @@ class CocoDataset(dataset.Dataset):
             # Call super class to return an empty mask
             return super(CocoDataset, self).load_keypoints_mask(image_id)
 
+    def get_keypoints(self):
+        keypoints = [
+            'nose',
+            'left_eye',
+            'right_eye',
+            'left_ear',
+            'right_ear',
+            'left_shoulder',
+            'right_shoulder',
+            'left_elbow',
+            'right_elbow',
+            'left_wrist',
+            'right_wrist',
+            'left_hip',
+            'right_hip',
+            'left_knee',
+            'right_knee',
+            'left_ankle',
+            'right_ankle'
+        ]
+        keypoint_flip_map = {
+            'left_eye': 'right_eye',
+            'left_ear': 'right_ear',
+            'left_shoulder': 'right_shoulder',
+            'left_elbow': 'right_elbow',
+            'left_wrist': 'right_wrist',
+            'left_hip': 'right_hip',
+            'left_knee': 'right_knee',
+            'left_ankle': 'right_ankle'
+        }
+        return keypoints, keypoint_flip_map
+
     def load_mask(self, image_id):
         """Load instance masks for the given image.
 
@@ -731,19 +763,16 @@ if __name__ == '__main__':
     # Train or evaluate
     if args.command == "train":
         config = CocoConfig()
-        config.display()
-        model = modellib.MaskRCNN(mode="training", config=config, model_dir=args.logs)
 
         # Training Heads
         config.TRAINING_HEADS = args.training_heads
+        config.display()
+        model = modellib.MaskRCNN(mode="training", config=config, model_dir=args.logs)
 
         # Training dataset. Use the training set and 35K from the
         # validation set, as as in the Mask RCNN paper.
         dataset_train = CocoDataset(task_type=task_type)
         dataset_train.load_coco(args.dataset, "train", year=args.year, class_ids=[1], auto_download=args.download)
-        if args.year in '2014':
-            dataset_train.load_coco(args.dataset, "valminusminival", year=args.year, class_ids=[1],
-                                    auto_download=args.download)
         dataset_train.prepare()
 
         # Validation dataset
@@ -764,7 +793,7 @@ if __name__ == '__main__':
 
         # Image Augmentation
         # Right/Left flip 50% of the time
-        augmentation = FliplrKeypoint(0.5, config=config)
+        augmentation = FliplrKeypoint(0.5, config=config, dataset=dataset_train)
 
         # training phase schedule
         lr_values = [config.LEARNING_RATE * 2,

@@ -1,8 +1,6 @@
 import copy
 from imgaug.augmenters import flip
 
-from mrcnn import utils
-
 
 class FliplrKeypoint(flip.Fliplr):
     """
@@ -12,9 +10,10 @@ class FliplrKeypoint(flip.Fliplr):
 
     """
 
-    def __init__(self, p=0, name=None, deterministic=False, random_state=None, config=None):
+    def __init__(self, p=0, name=None, deterministic=False, random_state=None, config=None, dataset=None):
         super().__init__(p, name, deterministic, random_state)
         self.config = config
+        self.dataset = dataset
 
     def _augment_images(self, images, random_state, parents, hooks):
         return super()._augment_images(images, random_state, parents, hooks)
@@ -27,7 +26,7 @@ class FliplrKeypoint(flip.Fliplr):
 
     def _augment_keypoints(self, keypoints_on_images, random_state, parents, hooks):
         keypoints_on_image_copy = None
-        keypoints_label, keypoint_flip_map = utils.get_keypoints()
+        keypoints_label, keypoint_flip_map = self.dataset.get_keypoints()
 
         nb_images = len(keypoints_on_images)
         samples = self.p.draw_samples((nb_images,), random_state=random_state)

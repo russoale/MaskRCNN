@@ -1,5 +1,6 @@
 import itertools
 import json
+import sys
 import time
 from collections import defaultdict
 
@@ -7,13 +8,35 @@ import numpy as np
 import os
 from numpy import pi
 
-from mrcnn import model as modellib, dataset
-from mrcnn import utils
+# Root directory of the project
+
+ROOT_DIR = os.path.abspath("../../")
+
+# Root directory to hdd
+DATA_DIR = os.path.abspath("/data/hdd/")
+
+# Import Mask RCNN
+sys.path.append(ROOT_DIR)  # To find local version of the library
+from mrcnn import model as modellib, dataset, utils, augmenter
+from mrcnn.load_weights import load_weights
 from mrcnn.config import Config
 
-# Root directory of the project
-ROOT_DIR = os.getcwd()
+# path to MSCOCO dataset
+JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "mscoco_format")
 
+# keypoint and mask pretrained weights
+MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_keypoint_rcnn_coco.h5")
+
+# Directory to save logs and model checkpoints, if not provided through the command line argument --logs
+DEFAULT_LOGS_DIR = os.path.join(DATA_DIR, "russales", "logs")
+
+# Dataset default year, if not provided through the command line argument --logs
+DEFAULT_DATASET_YEAR = "2017"
+
+
+############################################################
+#  Configurations
+############################################################
 
 class JumpConfig(Config):
     """Configuration for training on MS COCO.
@@ -37,10 +60,6 @@ class JumpConfig(Config):
 
     KEYPOINT_MASK_SHAPE = [56, 56]
 
-    CPM_REFINEMENT = True
-
-    CPM_POOL_SIZES = [14, 28]
-
     TRAIN_ROIS_PER_IMAGE = 50
 
     MAX_GT_INSTANCES = 128
@@ -53,20 +72,13 @@ class JumpConfig(Config):
 
     KEYPOINT_MASK_POOL_SIZE = 14
 
-    LEARNING_RATE = 0.001
+    LEARNING_RATE = 0.002
 
-    STEPS_PER_EPOCH = 1000
+    STEPS_PER_EPOCH = 704
+
+    VALIDATION_STEPS = 49
 
     KEYPOINT_THRESHOLD = 0.005
-
-    # Augmentation parameters
-    AUG_RAND_FLIP = True
-
-    AUG_RAND_CROP = True
-
-    AUG_CROP_MIN_SIZE = 400
-
-    AUG_RAND_ROT_ANGLE = 25
 
     PART_STR = ['head', 'neck', 'r_shoulder', 'r_elbow', 'r_wrist', 'r_hand', 'l_shoulder', 'l_elbow', 'l_wrist',
                 'l_hand', 'r_hip', 'r_knee', 'r_ankle', 'r_heel', 'r_toetip', 'l_hip', 'l_knee', 'l_ankle',
@@ -74,12 +86,10 @@ class JumpConfig(Config):
     # LIMBS = [0,-1,-1,5,-1,6,5,7,6,8,7,9,8,10,11,13,12,14,13,15,14,16]
 
 
-Person_ID = 1
-
-
 ############################################################
 #  Jump Class
 ############################################################
+
 class JUMP:
     def __init__(self, annotation_file=None):
         """
@@ -266,7 +276,7 @@ class JUMP:
 ############################################################
 
 class JumpDataset(dataset.Dataset):
-    def __init__(self, class_map=None):
+    def __init__(self):
         # assert task_type in ["instances", "person_keypoints"]
         # the connection between 2 close keypoints
         self._skeleton = []
@@ -275,7 +285,7 @@ class JumpDataset(dataset.Dataset):
                                 "lsho", "lelb", "lwri", "lhan",
                                 "rhip", "rkne", "rank", "rhee", "rtoe",
                                 "lhip", "lkne", "lank", "lhee", "ltoe"]
-        super().__init__(class_map)
+        super().__init__()
 
     def load_jump(self, dataset_dir, subset, class_ids=None, return_jump=False):
         """Load a subset of the jump dataset.
@@ -334,16 +344,11 @@ class JumpDataset(dataset.Dataset):
         key_points: num_keypoints coordinates and visibility (x,y,v)  [num_person,num_keypoints,3] of num_person
         class_ids: a 1D array of class IDs of the instance masks, here is always equal to [num_person, 1]
         """
-        # If not a COCO image, delegate to parent class.
-        image_info = self.image_info[image_id]
-        # if image_info["source"] != "coco":
-        #     return super(CocoDataset, self).load_mask(image_id)
 
         keypoints = []
         class_ids = []
-        instance_masks = []
-        bboxs = []
         annotations = self.image_info[image_id]["annotations"]
+
         # Build mask of shape [height, width, instance_count] and list
         # of class IDs that correspond to each channel of the mask.
         for annotation in annotations:
@@ -353,24 +358,20 @@ class JumpDataset(dataset.Dataset):
                 # load keypoints
                 keypoint = annotation["keypoints"]
                 keypoint = np.reshape(keypoint, (-1, 3))
-                bbox = annotation['bbox']
 
                 keypoints.append(keypoint)
                 class_ids.append(class_id)
-                bboxs.append(bbox)
 
         # Pack instance masks into an array
         if class_ids:
             keypoints = np.array(keypoints, dtype=np.int32)
             class_ids = np.array(class_ids, dtype=np.int32)
-            bboxs = np.array(bboxs, dtype=np.int32)
-            return keypoints, class_ids, bboxs
+            return keypoints, class_ids
         else:
             # Call super class to return an empty mask
             return super(JumpDataset, self).load_keypoints(image_id)
 
-    def get_keypoint_flip_map(self):
-        """Get the keypoints and their left/right flip correspondence map."""
+    def get_keypoints(self):
         keypoints = self.keypoint_names
         keypoint_flip_map = {
             'rsho': 'lsho',
@@ -412,171 +413,176 @@ class JumpDataset(dataset.Dataset):
 
         return [b_x, b_y, bb_x, bb_y]
 
-    def get_bbox_from_keypoints(self, keypoints, image_shape):
+    def get_bbox_from_keypoints(self, keypoints_list, image_shape):
         """
         Pls, don't ask ...
-        :param keypoints:
-        :param image_shape:
-        :param iamge_name:
         :return: Box in (y1,x1,y2,x2) format.
         """
         eps = 1e-7
-        valid_keypoints = keypoints[:, 2] > 0
-        x_min = np.min(keypoints[:, 0][valid_keypoints])
-        y_min = np.min(keypoints[:, 1][valid_keypoints])
 
-        x_max = np.max(keypoints[:, 0][valid_keypoints])
-        y_max = np.max(keypoints[:, 1][valid_keypoints])
+        num_person = keypoints_list.shape[0]
+        boxes = np.zeros([num_person, 4], dtype=np.int32)
+        for i in range(num_person):
+            keypoints = keypoints_list[i, :, :]
+            valid_keypoints = keypoints[:, 2] > 0
+            x_min = np.min(keypoints[:, 0][valid_keypoints])
+            y_min = np.min(keypoints[:, 1][valid_keypoints])
 
-        headtip_x = handtip_rx = handtip_lx = elbowtip_rx = elbowtip_lx = kneetip_rx = kneetip_lx = heeltip_rx = \
-            heeltip_lx = toetip_rx = toetip_lx = hiptip_lx = hiptip_rx = shouldertip_rx = shouldertip_lx = \
-            ank_kneetip_rx = ank_kneetip_lx = x_min
+            x_max = np.max(keypoints[:, 0][valid_keypoints])
+            y_max = np.max(keypoints[:, 1][valid_keypoints])
 
-        headtip_y = handtip_ry = handtip_ly = elbowtip_ry = elbowtip_ly = kneetip_ry = kneetip_ly = heeltip_ry = \
-            heeltip_ly = toetip_ry = toetip_ly = hiptip_ly = hiptip_ry = shouldertip_ry = shouldertip_ly = \
-            ank_kneetip_ry = ank_kneetip_ly = y_min
+            headtip_x = handtip_rx = handtip_lx = elbowtip_rx = elbowtip_lx = kneetip_rx = kneetip_lx = heeltip_rx = \
+                heeltip_lx = toetip_rx = toetip_lx = hiptip_lx = hiptip_rx = shouldertip_rx = shouldertip_lx = \
+                ank_kneetip_rx = ank_kneetip_lx = x_min
 
-        # Head-Neck
+            headtip_y = handtip_ry = handtip_ly = elbowtip_ry = elbowtip_ly = kneetip_ry = kneetip_ly = heeltip_ry = \
+                heeltip_ly = toetip_ry = toetip_ly = hiptip_ly = hiptip_ry = shouldertip_ry = shouldertip_ly = \
+                ank_kneetip_ry = ank_kneetip_ly = y_min
 
-        if keypoints[0][2] > 0 and keypoints[1][2] > 0:
-            slope = np.float((keypoints[1][1] - keypoints[0][1]) / (keypoints[1][0] - keypoints[0][0] + eps))
-            ang = np.abs(np.arctan(slope))
-            if ang < pi / 24:
-                headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 11 * keypoints[0][1] - 10 * \
-                                       keypoints[1][
-                                           1]
-            elif ang < pi / 12:
-                headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 7 * keypoints[0][1] - 6 * \
-                                       keypoints[1][1]
-            elif ang < pi / 6:
-                headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 5 * keypoints[0][1] - 4 * \
-                                       keypoints[1][1]
-            elif ang < pi / 4:
-                headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 3.5 * keypoints[0][1] - 2.5 * \
-                                       keypoints[1][1]
-            elif ang < pi / 3:
-                headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 3 * keypoints[0][1] - 2 * \
-                                       keypoints[1][1]
-            else:
-                headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 2.6 * keypoints[0][1] - 1.6 * \
-                                       keypoints[1][1]
-        # elif keypoints[0][2] == 0:
-        #     y_min = 0
+            # Head-Neck
 
-        # Hands
-        if keypoints[4][2] > 0 and keypoints[5][2] > 0:
-            handtip_rx, handtip_ry = 3 * keypoints[5][0] - 2 * keypoints[4][0], 3 * keypoints[5][1] - 2 * keypoints[4][
-                1]
-        # elif keypoints[5][2] == 0:
-        #     y_min = 0
+            if keypoints[0][2] > 0 and keypoints[1][2] > 0:
+                slope = np.float((keypoints[1][1] - keypoints[0][1]) / (keypoints[1][0] - keypoints[0][0] + eps))
+                ang = np.abs(np.arctan(slope))
+                if ang < pi / 24:
+                    headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 11 * keypoints[0][1] - 10 * \
+                                           keypoints[1][
+                                               1]
+                elif ang < pi / 12:
+                    headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 7 * keypoints[0][1] - 6 * \
+                                           keypoints[1][1]
+                elif ang < pi / 6:
+                    headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 5 * keypoints[0][1] - 4 * \
+                                           keypoints[1][1]
+                elif ang < pi / 4:
+                    headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 3.5 * keypoints[0][1] - 2.5 * \
+                                           keypoints[1][1]
+                elif ang < pi / 3:
+                    headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 3 * keypoints[0][1] - 2 * \
+                                           keypoints[1][1]
+                else:
+                    headtip_x, headtip_y = 3 * keypoints[0][0] - 2 * keypoints[1][0], 2.6 * keypoints[0][1] - 1.6 * \
+                                           keypoints[1][1]
+            # elif keypoints[0][2] == 0:
+            #     y_min = 0
 
-        if keypoints[8][2] > 0 and keypoints[9][2] > 0:
-            handtip_lx, handtip_ly = 3 * keypoints[9][0] - 2 * keypoints[8][0], 3 * keypoints[9][1] - 2 * keypoints[8][
-                1]
-        # elif keypoints[9][2] == 0:
-        #     y_min = 0
+            # Hands
+            if keypoints[4][2] > 0 and keypoints[5][2] > 0:
+                handtip_rx, handtip_ry = 3 * keypoints[5][0] - 2 * keypoints[4][0], 3 * keypoints[5][1] - 2 * \
+                                         keypoints[4][
+                                             1]
+            # elif keypoints[5][2] == 0:
+            #     y_min = 0
 
-        # Shoulder-elbow
-        if keypoints[2][2] > 0 and keypoints[3][2] > 0:
-            elbowtip_rx, elbowtip_ry = (10 * keypoints[3][0] - 3 * keypoints[2][0]) / 7.0, (
-                    10 * keypoints[3][1] - 3 * keypoints[2][1]) / 7.0
-            shouldertip_rx, shouldertip_ry = (10 * keypoints[2][0] - 3 * keypoints[3][0]) / 7.0, (
-                    10 * keypoints[2][1] - 3 * keypoints[3][1]) / 7.0
+            if keypoints[8][2] > 0 and keypoints[9][2] > 0:
+                handtip_lx, handtip_ly = 3 * keypoints[9][0] - 2 * keypoints[8][0], 3 * keypoints[9][1] - 2 * \
+                                         keypoints[8][
+                                             1]
+            # elif keypoints[9][2] == 0:
+            #     y_min = 0
 
-        if keypoints[6][2] > 0 and keypoints[7][2] > 0:
-            elbowtip_lx, elbowtip_ly = (10 * keypoints[7][0] - 3 * keypoints[6][0]) / 7.0, (
-                    10 * keypoints[7][1] - 3 * keypoints[6][1]) / 7.0
-            shouldertip_lx, shouldertip_ly = (10 * keypoints[6][0] - 3 * keypoints[7][0]) / 7.0, (
-                    10 * keypoints[6][1] - 3 * keypoints[7][1]) / 7.0
+            # Shoulder-elbow
+            if keypoints[2][2] > 0 and keypoints[3][2] > 0:
+                elbowtip_rx, elbowtip_ry = (10 * keypoints[3][0] - 3 * keypoints[2][0]) / 7.0, (
+                        10 * keypoints[3][1] - 3 * keypoints[2][1]) / 7.0
+                shouldertip_rx, shouldertip_ry = (10 * keypoints[2][0] - 3 * keypoints[3][0]) / 7.0, (
+                        10 * keypoints[2][1] - 3 * keypoints[3][1]) / 7.0
 
-        # Hip-Knee
-        if keypoints[10][2] > 0 and keypoints[11][2] > 0:
-            kneetip_rx, kneetip_ry = (10 * keypoints[11][0] - 2 * keypoints[10][0]) / 8.0, (
-                    10 * keypoints[11][1] - 2 * keypoints[10][1]) / 8.0
-            hiptip_rx, hiptip_ry = (10 * keypoints[10][0] - 3 * keypoints[11][0]) / 7.0, (
-                    10 * keypoints[10][1] - 3 * keypoints[11][1]) / 7.0
+            if keypoints[6][2] > 0 and keypoints[7][2] > 0:
+                elbowtip_lx, elbowtip_ly = (10 * keypoints[7][0] - 3 * keypoints[6][0]) / 7.0, (
+                        10 * keypoints[7][1] - 3 * keypoints[6][1]) / 7.0
+                shouldertip_lx, shouldertip_ly = (10 * keypoints[6][0] - 3 * keypoints[7][0]) / 7.0, (
+                        10 * keypoints[6][1] - 3 * keypoints[7][1]) / 7.0
 
-        if keypoints[15][2] > 0 and keypoints[16][2] > 0:
-            kneetip_lx, kneetip_ly = (10 * keypoints[16][0] - 2 * keypoints[15][0]) / 8.0, (
-                    10 * keypoints[16][1] - 2 * keypoints[15][1]) / 8.0
-            hiptip_lx, hiptip_ly = (10 * keypoints[15][0] - 3 * keypoints[16][0]) / 7.0, (
-                    10 * keypoints[15][1] - 3 * keypoints[16][1]) / 7.0
+            # Hip-Knee
+            if keypoints[10][2] > 0 and keypoints[11][2] > 0:
+                kneetip_rx, kneetip_ry = (10 * keypoints[11][0] - 2 * keypoints[10][0]) / 8.0, (
+                        10 * keypoints[11][1] - 2 * keypoints[10][1]) / 8.0
+                hiptip_rx, hiptip_ry = (10 * keypoints[10][0] - 3 * keypoints[11][0]) / 7.0, (
+                        10 * keypoints[10][1] - 3 * keypoints[11][1]) / 7.0
 
-        # Ankle-Knee
-        if keypoints[11][2] > 0 and keypoints[12][2] > 0:
-            ank_kneetip_rx, ank_kneetip_ry = (10 * keypoints[11][0] - 2.5 * keypoints[12][0]) / 7.5, (
-                    10 * keypoints[11][1] - 2.5 * keypoints[12][1]) / 7.5
+            if keypoints[15][2] > 0 and keypoints[16][2] > 0:
+                kneetip_lx, kneetip_ly = (10 * keypoints[16][0] - 2 * keypoints[15][0]) / 8.0, (
+                        10 * keypoints[16][1] - 2 * keypoints[15][1]) / 8.0
+                hiptip_lx, hiptip_ly = (10 * keypoints[15][0] - 3 * keypoints[16][0]) / 7.0, (
+                        10 * keypoints[15][1] - 3 * keypoints[16][1]) / 7.0
 
-        if keypoints[16][2] > 0 and keypoints[17][2] > 0:
-            ank_kneetip_lx, ank_kneetip_ly = (10 * keypoints[16][0] - 2.5 * keypoints[17][0]) / 7.5, (
-                    10 * keypoints[16][1] - 2.5 * keypoints[17][1]) / 7.5
+            # Ankle-Knee
+            if keypoints[11][2] > 0 and keypoints[12][2] > 0:
+                ank_kneetip_rx, ank_kneetip_ry = (10 * keypoints[11][0] - 2.5 * keypoints[12][0]) / 7.5, (
+                        10 * keypoints[11][1] - 2.5 * keypoints[12][1]) / 7.5
 
-        # Ankle-Heel
-        if keypoints[12][2] > 0 and keypoints[13][2] > 0:
-            slope = np.float((keypoints[13][1] - keypoints[12][1]) / (keypoints[13][0] - keypoints[12][0] + eps))
-            ang = np.abs(np.arctan(slope))
-            if ang < pi / 4:
-                heeltip_rx, heeltip_ry = (2 * keypoints[13][0] - 1 * keypoints[12][0]), (
-                        2.5 * keypoints[13][1] - 1.5 * keypoints[12][1])
-            else:
-                heeltip_rx, heeltip_ry = (2.5 * keypoints[13][0] - 1.5 * keypoints[12][0]), (
-                        2 * keypoints[13][1] - 1 * keypoints[12][1])
+            if keypoints[16][2] > 0 and keypoints[17][2] > 0:
+                ank_kneetip_lx, ank_kneetip_ly = (10 * keypoints[16][0] - 2.5 * keypoints[17][0]) / 7.5, (
+                        10 * keypoints[16][1] - 2.5 * keypoints[17][1]) / 7.5
 
-        if keypoints[17][2] > 0 and keypoints[18][2] > 0:
-            slope = np.float((keypoints[18][1] - keypoints[17][1]) / (keypoints[18][0] - keypoints[17][0] + eps))
-            ang = np.abs(np.arctan(slope))
-            if ang < pi / 4:
-                heeltip_lx, heeltip_ly = (2 * keypoints[18][0] - keypoints[17][0]), (
-                        2.5 * keypoints[18][1] - 1.5 * keypoints[17][1])
-            else:
-                heeltip_lx, heeltip_ly = (2.5 * keypoints[18][0] - 1.5 * keypoints[17][0]), (
-                        2 * keypoints[18][1] - keypoints[17][1])
+            # Ankle-Heel
+            if keypoints[12][2] > 0 and keypoints[13][2] > 0:
+                slope = np.float((keypoints[13][1] - keypoints[12][1]) / (keypoints[13][0] - keypoints[12][0] + eps))
+                ang = np.abs(np.arctan(slope))
+                if ang < pi / 4:
+                    heeltip_rx, heeltip_ry = (2 * keypoints[13][0] - 1 * keypoints[12][0]), (
+                            2.5 * keypoints[13][1] - 1.5 * keypoints[12][1])
+                else:
+                    heeltip_rx, heeltip_ry = (2.5 * keypoints[13][0] - 1.5 * keypoints[12][0]), (
+                            2 * keypoints[13][1] - 1 * keypoints[12][1])
 
-        # Heel-Toe
-        if keypoints[13][2] > 0 and keypoints[14][2] > 0:
-            slope = np.float((keypoints[13][1] - keypoints[14][1]) / (keypoints[13][0] - keypoints[14][0] + eps))
-            ang = np.abs(np.arctan(slope))
-            if ang < pi / 4:
-                toetip_rx, toetip_ry = (10 * keypoints[14][0] - 2 * keypoints[13][0]) / 8.0, (
-                        10 * keypoints[14][1] - 3 * keypoints[13][1]) / 7.0
-            else:
-                toetip_rx, toetip_ry = (10 * keypoints[14][0] - 3 * keypoints[13][0]) / 7.0, (
-                        10 * keypoints[14][1] - 2 * keypoints[13][1]) / 8.0
+            if keypoints[17][2] > 0 and keypoints[18][2] > 0:
+                slope = np.float((keypoints[18][1] - keypoints[17][1]) / (keypoints[18][0] - keypoints[17][0] + eps))
+                ang = np.abs(np.arctan(slope))
+                if ang < pi / 4:
+                    heeltip_lx, heeltip_ly = (2 * keypoints[18][0] - keypoints[17][0]), (
+                            2.5 * keypoints[18][1] - 1.5 * keypoints[17][1])
+                else:
+                    heeltip_lx, heeltip_ly = (2.5 * keypoints[18][0] - 1.5 * keypoints[17][0]), (
+                            2 * keypoints[18][1] - keypoints[17][1])
 
-        if keypoints[18][2] > 0 and keypoints[19][2] > 0:
-            slope = np.float((keypoints[18][1] - keypoints[19][1]) / (keypoints[18][0] - keypoints[19][0] + eps))
-            ang = np.abs(np.arctan(slope))
-            if ang < pi / 4:
-                toetip_lx, toetip_ly = (10 * keypoints[19][0] - 2 * keypoints[18][0]) / 8.0, (
-                        10 * keypoints[19][1] - 3 * keypoints[18][1]) / 7.0
-            else:
-                toetip_lx, toetip_ly = (10 * keypoints[19][0] - 3 * keypoints[18][0]) / 7.0, (
-                        10 * keypoints[19][1] - 2 * keypoints[18][1]) / 8.0
+            # Heel-Toe
+            if keypoints[13][2] > 0 and keypoints[14][2] > 0:
+                slope = np.float((keypoints[13][1] - keypoints[14][1]) / (keypoints[13][0] - keypoints[14][0] + eps))
+                ang = np.abs(np.arctan(slope))
+                if ang < pi / 4:
+                    toetip_rx, toetip_ry = (10 * keypoints[14][0] - 2 * keypoints[13][0]) / 8.0, (
+                            10 * keypoints[14][1] - 3 * keypoints[13][1]) / 7.0
+                else:
+                    toetip_rx, toetip_ry = (10 * keypoints[14][0] - 3 * keypoints[13][0]) / 7.0, (
+                            10 * keypoints[14][1] - 2 * keypoints[13][1]) / 8.0
 
-        xs = np.array(
-            [headtip_x, handtip_rx, handtip_lx, elbowtip_lx, elbowtip_rx, kneetip_rx, kneetip_lx, heeltip_rx,
-             heeltip_lx,
-             toetip_rx, toetip_lx, hiptip_lx, hiptip_rx, shouldertip_rx, shouldertip_lx, ank_kneetip_rx,
-             ank_kneetip_lx])
-        #     x_min = min(x_min, np.min(xs[np.logical_and(xs>=0, xs<image_shape[1])]))
-        #     x_max = max(x_max, np.max(xs[np.logical_and(xs>=0, xs<image_shape[1])]))
-        x_min = max(0, min(x_min, np.min(xs)))
-        x_max = min(image_shape[1], max(x_max, np.max(xs)))
+            if keypoints[18][2] > 0 and keypoints[19][2] > 0:
+                slope = np.float((keypoints[18][1] - keypoints[19][1]) / (keypoints[18][0] - keypoints[19][0] + eps))
+                ang = np.abs(np.arctan(slope))
+                if ang < pi / 4:
+                    toetip_lx, toetip_ly = (10 * keypoints[19][0] - 2 * keypoints[18][0]) / 8.0, (
+                            10 * keypoints[19][1] - 3 * keypoints[18][1]) / 7.0
+                else:
+                    toetip_lx, toetip_ly = (10 * keypoints[19][0] - 3 * keypoints[18][0]) / 7.0, (
+                            10 * keypoints[19][1] - 2 * keypoints[18][1]) / 8.0
 
-        ys = np.array(
-            [headtip_y, handtip_ry, handtip_ly, elbowtip_ly, elbowtip_ry, kneetip_ry, kneetip_ly, heeltip_ry,
-             heeltip_ly,
-             toetip_ry, toetip_ly, hiptip_ly, hiptip_ry, shouldertip_ry, shouldertip_ly, ank_kneetip_ry,
-             ank_kneetip_ly])
-        #     y_min = min(y_min, np.min(ys[np.logical_and(ys>=0, ys<image_shape[0])]))
-        #     y_max = max(y_max, np.max(ys[np.logical_and(ys>=0, ys<image_shape[0])]))
-        y_min = max(0, min(y_min, np.min(ys)))
-        y_max = min(image_shape[0], max(y_max, np.max(ys)))
+            xs = np.array(
+                [headtip_x, handtip_rx, handtip_lx, elbowtip_lx, elbowtip_rx, kneetip_rx, kneetip_lx, heeltip_rx,
+                 heeltip_lx,
+                 toetip_rx, toetip_lx, hiptip_lx, hiptip_rx, shouldertip_rx, shouldertip_lx, ank_kneetip_rx,
+                 ank_kneetip_lx])
+            #     x_min = min(x_min, np.min(xs[np.logical_and(xs>=0, xs<image_shape[1])]))
+            #     x_max = max(x_max, np.max(xs[np.logical_and(xs>=0, xs<image_shape[1])]))
+            x_min = max(0, min(x_min, np.min(xs)))
+            x_max = min(image_shape[1], max(x_max, np.max(xs)))
 
-        x_top, y_top, x_bot, y_bot = int(np.floor(x_min)), int(np.floor(y_min)), int(np.ceil(x_max)), int(
-            np.ceil(y_max))
+            ys = np.array(
+                [headtip_y, handtip_ry, handtip_ly, elbowtip_ly, elbowtip_ry, kneetip_ry, kneetip_ly, heeltip_ry,
+                 heeltip_ly,
+                 toetip_ry, toetip_ly, hiptip_ly, hiptip_ry, shouldertip_ry, shouldertip_ly, ank_kneetip_ry,
+                 ank_kneetip_ly])
+            #     y_min = min(y_min, np.min(ys[np.logical_and(ys>=0, ys<image_shape[0])]))
+            #     y_max = max(y_max, np.max(ys[np.logical_and(ys>=0, ys<image_shape[0])]))
+            y_min = max(0, min(y_min, np.min(ys)))
+            y_max = min(image_shape[0], max(y_max, np.max(ys)))
 
-        return [y_top, x_top, y_bot, x_bot]
+            x_top, y_top, x_bot, y_bot = int(np.floor(x_min)), int(np.floor(y_min)), int(np.ceil(x_max)), int(
+                np.ceil(y_max))
+            boxes[i] = np.array([y_top, x_top, y_bot, x_bot])
+
+        return boxes.astype(np.int32)
 
 
 ############################################################
@@ -588,78 +594,85 @@ if __name__ == '__main__':
     import argparse
 
     # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        description='Train Mask R-CNN on Jump dataset.')
+    parser = argparse.ArgumentParser(description='Train Mask R-CNN on MS COCO.')
+
     parser.add_argument("command",
                         metavar="<command>",
-                        help="'train' or 'evaluate' on Jump dataset. 'evaluate' is not supported yet.")
-    parser.add_argument('--dataset', required=True,
-                        metavar="/path/to/jump_dataset/",
-                        help='Directory of the Jump dataset')
+                        help="'train' or 'evaluate' on MS COCO")
+    parser.add_argument('--dataset', required=False,
+                        default=JUMP_DIR,
+                        metavar="/path/to/coco/",
+                        help="Directory of the MS-COCO dataset (default='/data/hdd/Datasets/MSCOCO_2017)'")
+    parser.add_argument('--year', required=False,
+                        default=DEFAULT_DATASET_YEAR,
+                        metavar="<year>",
+                        help='Year of the MS-COCO dataset (2014 or 2017) (default=2017)')
     parser.add_argument('--model', required=False,
-                        default=None,
-                        metavar="/path/to/weights.h5",
-                        help="Path to weights .h5 file")
-    parser.add_argument('--continue_training', required=False,
-                        default=True,
-                        metavar="<True|False>",
-                        help="Try to continue a previously started training, \
-                            mainly by trying to recreate the optimizer state and epoch number.")
-    parser.add_argument('--logs', required=True,
+                        default=MODEL_PATH,
+                        metavar="<'/path/to/weights.h5'|'keypoint'|'mask'|'imagenet'>",
+                        help="Path to weights .h5 file (default = keypoint & mask weights)")
+    parser.add_argument('--logs', required=False,
+                        default=DEFAULT_LOGS_DIR,
                         metavar="/path/to/logs/",
-                        help='Logs and checkpoints directory')
+                        help='Logs and checkpoints directory (default=logs/)')
     parser.add_argument('--limit', required=False,
                         default=500,
                         metavar="<image count>",
                         help='Images to use for evaluation (default=500)')
+    parser.add_argument('--download', required=False,
+                        default=False,
+                        metavar="<True|False>",
+                        help='Automatically download and unzip MS-COCO files (default=False)',
+                        type=bool)
+    parser.add_argument('--training_heads', required=False,
+                        default=None,
+                        metavar="<'keypoint'|'mask'>",
+                        help='Specify which head networks to train or evaluate (default=None, trains all)')
+    parser.add_argument('--keypoint', required=False,
+                        default=True,
+                        metavar="<True|False>",
+                        help='Include Keypoint Detection (default=True)',
+                        type=bool)
+    parser.add_argument('--continue_training', required=False,
+                        default=False,
+                        metavar="<True|False>",
+                        help="Try to continue a previously started training, \
+                                   mainly by trying to recreate the optimizer state and epoch number.")
+    parser.add_argument('--eval_type', required=False,
+                        default="bbox",
+                        metavar="<'segm'|'bbox'|'keypoints'>",
+                        help="Set the type of official coco evaluation")
 
     args = parser.parse_args()
-    print("Command: ", args.continue_training)
+    print("Command: ", args.command)
     print("Model: ", args.model)
-    print("Continue Training: ", args.continue_training)
     print("Dataset: ", args.dataset)
+    print("Year: ", args.year)
     print("Logs: ", args.logs)
-
-    # Let's support links and HOME abbreviations
-    args.dataset = os.path.realpath(os.path.expanduser(args.dataset))
-    args.model = os.path.realpath(os.path.expanduser(args.model))
-    args.logs = os.path.realpath(os.path.expanduser(args.logs))
-
-    # Configurations
-    if args.command == "train":
-        config = JumpConfig()
-    else:
-        class InferenceConfig(JumpConfig):
-            # Set batch size to 1 since we'll be running inference on
-            # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
-            GPU_COUNT = 1
-            IMAGES_PER_GPU = 1
-            DETECTION_MIN_CONFIDENCE = 0
-
-
-        config = InferenceConfig()
-    config.display()
-
-    # Create model
-    if args.command == "train":
-        model = modellib.MaskRCNN(mode="training", config=config,
-                                  model_dir=args.logs)
-    else:
-        model = modellib.MaskRCNN(mode="inference", config=config,
-                                  model_dir=args.logs)
+    print("Auto Download: ", args.download)
+    print("Training Heads: ", args.training_heads)
+    print("Keypoint: ", args.keypoint)
+    print("Continue Training: ", args.continue_training)
+    print("Limit: ", args.limit)
+    print("Eval Type: ", args.eval_type)
 
     # Select weights file to load
-    if args.model.lower() == "last":
-        # Find last trained weights
-        model_path = model.find_last()
-    elif args.model.lower() == "imagenet":
+    model_path = args.model
+    if args.model.lower() == "imagenet":
         # Start from ImageNet trained weights
-        model_path = model.get_imagenet_weights()
-    else:
-        model_path = args.model
+        model_path = utils.get_imagenet_weights()
 
     # Train or evaluate
     if args.command == "train":
+        config = JumpConfig()
+
+        # Training Heads
+        config.TRAINING_HEADS = args.training_heads
+        config.display()
+
+        model = modellib.MaskRCNN(mode="training", config=config, model_dir=args.logs)
+
+
         # Training dataset. Use the training set and 35K from the
         # validation set, as as in the Mask RCNN paper.
         dataset_train = JumpDataset()
@@ -681,23 +694,28 @@ if __name__ == '__main__':
         for i, info in enumerate(dataset_val.class_info):
             print("{:3}. {:50}".format(i, info['name']))
 
-        # *** This is the training phase schedule ***
-        lr_values = [config.LEARNING_RATE,
+        # ["mrcnn_class_logits", "mrcnn_bbox_fc", "mrcnn_bbox", "mrcnn_mask"]
+        exclude = ["mrcnn_keypoint_mask_deconv"]
+
+        # Image Augmentation
+        # Right/Left flip 50% of the time
+        augmentation = augmenter.FliplrKeypoint(0.5, config=config, dataset=dataset_train)
+
+        # training phase schedule
+        lr_values = [config.LEARNING_RATE * 2,
                      config.LEARNING_RATE,
                      config.LEARNING_RATE / 10]
-        epochs_values = [10,
+        epochs_values = [40,
                          120,
                          160]
         trainable_layers = ["heads",
                             "4+",
                             "all"]
 
-        exclude = ["mrcnn_keypoint_mask_deconv"]
-
         last_layers = None
         last_epoch = None
         if model_path is not None and args.continue_training:
-            last_epoch, _ = model.get_epoch_and_date_from_model_path(model_path=model_path)
+            last_epoch, _ = utils.get_epoch_and_date_from_model_path(model_path=model_path)
         weights_loaded = False
         can_load_optimizer_weights = args.continue_training
 
@@ -720,34 +738,19 @@ if __name__ == '__main__':
             if not weights_loaded and model_path is not None:
                 # Load weights
                 print("Loading weights from: ", model_path)
-                model.load_weights(model_path, by_name=True,
-                                   exclude=exclude,
-                                   include_optimizer=can_load_optimizer_weights)
+                load_weights(model, model_path, by_name=True,
+                             exclude=exclude,
+                             include_optimizer=can_load_optimizer_weights)
                 weights_loaded = True
-            weights_loaded = True
-            if config.GPU_COUNT > 1:
-                keras_layers = model.keras_model.layers
-                keras_model = [keras_layer for keras_layer in keras_layers if keras_layer.name == "keypoint_mask_rcnn"][
-                    0]
-            else:
-                keras_model = model.keras_model
 
-            if config.CPM_REFINEMENT:
-                for i in range(8):
-                    weights = keras_model.get_layer(name='mrcnn_keypoint_mask_conv{}'.format(i + 1)).get_weights()
-                    keras_model.get_layer(name='mrcnn_keypoint_mask_cpm1_conv{}'.format(i + 1)).set_weights(weights)
-
-                    weights = keras_model.get_layer(name='mrcnn_keypoint_mask_bn{}'.format(i + 1)).get_weights()
-                    keras_model.get_layer(name='mrcnn_keypoint_mask_cpm1_bn{}'.format(i + 1)).set_weights(weights)
             print("Training: {}".format(layers))
-            model.train(dataset_train, dataset_val,
-                        learning_rate=lr,
-                        epochs=epochs)
+            model.train(dataset_train, dataset_val, learning_rate=lr, epochs=epochs, augmentation=augmentation)
 
             last_layers = layers
 
     elif args.command == "evaluate":
         print("'evaluate' is not supported yet ...")
+
     else:
         print("'{}' is not recognized. "
               "Use 'train' or 'evaluate'".format(args.command))

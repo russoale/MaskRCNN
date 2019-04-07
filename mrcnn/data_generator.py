@@ -545,7 +545,6 @@ class DataGenerator(KU.Sequence):
             assert (self.config.NUM_KEYPOINTS == keypoints.shape[1])
             keypoints = utils.resize_keypoints(keypoints, image.shape[:2], scale, padding)
 
-        print("hello")
         bbox = None
         if self.training_keypoint:
             if hasattr(self.dataset, 'load_bbox'):
@@ -595,11 +594,11 @@ class DataGenerator(KU.Sequence):
 
             if not (keypoints is None):
                 keypoint_shape = keypoints.shape
-                ia_keypoints = utils.create_keypoints(keypoints)
+                ia_keypoints = utils.create_keypoints(keypoints, self.dataset)
                 if ia_keypoints:
                     ia_keypoints = ia.KeypointsOnImage(ia_keypoints, shape=image_shape)
                     ia_keypoints = det.augment_keypoints([ia_keypoints], hooks=hooks)[0]
-                    keypoints = utils.convert_back_keypoint(ia_keypoints, keypoints)
+                    keypoints = utils.convert_back_keypoint(ia_keypoints, keypoints, self.dataset)
                 assert keypoints.shape == keypoint_shape, "Augmentation shouldn't change keypoints size"
 
             if not (bbox is None):
