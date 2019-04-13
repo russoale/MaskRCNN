@@ -126,7 +126,7 @@ def display_image_keypoint_mask(image, boxes, keypoints, keypoint_weight, class_
 
 def display_keypoints(image, boxes, keypoints, class_ids, class_names,
                       skeleton=None, scores=None, title="",
-                      figsize=(16, 16), ax=None):
+                      figsize=(16, 16), ax=None, dataset=None):
     """
     boxes: [num_persons, (y1, x1, y2, x2)] in image coordinates.
     keypoints: [num_persons, 3]
@@ -144,6 +144,8 @@ def display_keypoints(image, boxes, keypoints, class_ids, class_names,
 
     if not ax:
         _, ax = plt.subplots(1, figsize=figsize)
+
+    assert dataset is not None, "Please provide dataset with get_keypoints() implemented"
 
     # Generate random colors
     colors = random_colors(N)
@@ -177,7 +179,7 @@ def display_keypoints(image, boxes, keypoints, class_ids, class_names,
         ax.text(x1, y1 + 8, caption,
                 color='w', size=11, backgroundcolor="none")
         # Keypoints: num_person, num_keypoint, 3
-        keypoint_label, _ = utils.get_keypoints()
+        keypoint_label, _ = dataset.get_keypoints()
         for idx, Joint in enumerate(keypoints[i]):
             if (Joint[2] != 0):
                 circle = patches.Circle((Joint[0], Joint[1]), radius=1, edgecolor=color, facecolor='none')

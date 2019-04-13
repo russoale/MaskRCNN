@@ -530,14 +530,13 @@ class DataGenerator(KU.Sequence):
         """
         # Load image and mask
         image = self.dataset.load_image(image_id)
-
+        original_shape = image.shape
         image, window, scale, padding, crop = utils.resize_image(
             image,
             min_dim=self.config.IMAGE_MIN_DIM,
             min_scale=self.config.IMAGE_MIN_SCALE,
             max_dim=self.config.IMAGE_MAX_DIM,
             mode=self.config.IMAGE_RESIZE_MODE)
-        original_shape = image.shape
 
         keypoints = None
         if self.training_keypoint:
@@ -549,10 +548,9 @@ class DataGenerator(KU.Sequence):
         if self.training_keypoint:
             if hasattr(self.dataset, 'load_bbox'):
                 bbox = self.dataset.load_bbox(image_id)
+                bbox = utils.resize_bbox(bbox, image.shape[:2], scale, padding)
             else:
                 bbox = self.dataset.get_bbox_from_keypoints(keypoints, image.shape)
-
-            bbox = utils.resize_bbox(bbox, image.shape[:2], scale, padding)
 
         mask = None
         if self.training_mask:
