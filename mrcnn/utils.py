@@ -694,7 +694,10 @@ def resize_mask(mask, scale, padding, crop=None):
     # calculated with round() instead of int()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        mask = scipy.ndimage.zoom(mask, zoom=[scale, scale, 1], order=0)
+        zoom = [scale, scale, 1]
+        print(len(list(zoom)))
+        print(np.asarray(mask).ndim)
+        mask = scipy.ndimage.zoom(mask, zoom=zoom, order=0)
     if crop is not None:
         y, x, h, w = crop
         mask = mask[y:y + h, x:x + w]

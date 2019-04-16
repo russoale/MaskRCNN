@@ -1,5 +1,8 @@
 import itertools
 import json
+import pickle
+
+import re
 import sys
 import time
 from collections import defaultdict
@@ -7,6 +10,7 @@ from collections import defaultdict
 import numpy as np
 import os
 from numpy import pi
+from pycocotools import mask as maskUtils
 
 # Root directory of the project
 
@@ -23,6 +27,7 @@ from mrcnn.config import Config
 
 # path to MSCOCO dataset
 JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "mscoco_format")
+MASK_JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "Segmentation_masks", "annotierte_daten_springer")
 
 # keypoint and mask pretrained weights
 MODEL_PATH = os.path.join(DATA_DIR, "russales", "mask_keypoint_rcnn_coco.h5")
@@ -279,6 +284,7 @@ class JumpDataset(dataset.Dataset):
     def __init__(self):
         # assert task_type in ["instances", "person_keypoints"]
         # the connection between 2 close keypoints
+        self.jump = dict()
         self._skeleton = []
         self._keypoint_names = ["head", "neck",
                                 "rsho", "relb", "rwri", "rhan",
@@ -295,6 +301,7 @@ class JumpDataset(dataset.Dataset):
         """
 
         jump = JUMP("{}/annotations/keypoints_{}.json".format(dataset_dir, subset))
+        self.jump = jump
         image_dir = "{}/{}".format(dataset_dir, subset)
 
         # # Add classes
@@ -412,6 +419,81 @@ class JumpDataset(dataset.Dataset):
             bb_y = y2
 
         return [b_x, b_y, bb_x, bb_y]
+
+    def load_mask(self, image_id):
+        """Load instance masks for the given image.
+
+        Different datasets use different ways to store masks. This
+        function converts the different mask format to one format
+        in the form of a bitmap [height, width, instances].
+
+        Returns:
+        masks: A bool array of shape [height, width, instance count] with
+            one mask per instance.
+        class_ids: a 1D array of class IDs of the instance masks.
+        """
+        # If not a COCO image, delegate to parent class.
+        image_info = self.image_info[image_id]
+        if image_info["source"] != "jump":
+            return super(JumpDataset, self).load_mask(image_id)
+
+        instance_masks = []
+        class_ids = []
+        annotations = self.image_info[image_id]["annotations"]
+        # Build mask of shape [height, width, instance_count] and list
+        # of class IDs that correspond to each channel of the mask.
+        for annotation in annotations:
+            class_id = self.map_source_class_id(
+                "jump.{}".format(annotation['category_id']))
+            if class_id:
+                image_id = annotation["image_id"]
+                # remove .jpeg file type
+                file_name = self.jump.imgs[image_id]['file_name'][:-5]
+                # create directory pattern
+                directory = re.sub("_", "_(0", file_name) + ")"
+                # check if segmentation available
+                directory = os.path.join(MASK_JUMP_DIR, directory)
+
+                #print("checking if directory : {} exists".format(directory))
+                if os.path.isdir(directory):
+                    m = self.pickle_to_mask(directory)
+                    if m is None:
+                        continue
+                else:
+                    continue
+
+                # Some objects are so small that they're less than 1 pixel area
+                # and end up rounded out. Skip those objects.
+                if m.max() < 1:
+                    print("no mask")
+                    continue
+
+                instance_masks.append(m)
+                class_ids.append(class_id)
+
+        # Pack instance masks into an array
+        if class_ids:
+            mask = np.stack(instance_masks, axis=2)
+            class_ids = np.array(class_ids, dtype=np.int32)
+            return mask, class_ids
+        else:
+            # Call super class to return an empty mask
+            return super(JumpDataset, self).load_mask(image_id)
+
+    def pickle_to_mask(self, directory):
+        """
+        Search in directory for segmentation pickle and return if available
+        :return: binary mask (numpy 2D array)
+        """
+        regex = re.compile('(.*whole_person.mask.pickle$)')
+        for _, _, files in os.walk(directory):
+            for file in files:
+                if regex.match(file):
+                    with open(os.path.join(directory, file), "rb") as pickle_file:
+                        rle = pickle.load(pickle_file)
+                    m = maskUtils.decode(rle)
+                    return np.asarray(m).astype(np.bool)
+        return None
 
     def get_bbox_from_keypoints(self, keypoints_list, image_shape):
         """
@@ -671,7 +753,6 @@ if __name__ == '__main__':
         config.display()
 
         model = modellib.MaskRCNN(mode="training", config=config, model_dir=args.logs)
-
 
         # Training dataset. Use the training set and 35K from the
         # validation set, as as in the Mask RCNN paper.
