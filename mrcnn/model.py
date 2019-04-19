@@ -130,6 +130,8 @@ class MaskRCNN:
                         shape=[config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1], None],
                         name="input_gt_masks", dtype=bool)
 
+                input_gt_masks_train = KL.Input(shape=[1], name="input_gt_masks_train", dtype=tf.float32)
+
             if self.training_keypoint:
                 # 4. GT Keypoint
                 # [batch, width, height, MAX_GT_INSTANCES, NUM_KEYPOINTS, (x, y, vis)]
@@ -289,7 +291,7 @@ class MaskRCNN:
 
             if self.training_mask:
                 mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
-                    [target_mask, target_class_ids, mrcnn_mask])
+                    [target_mask, target_class_ids, mrcnn_mask, input_gt_masks_train])
             if self.training_keypoint:
                 keypoint_loss = KL.Lambda(
                     lambda x: mrcnn_keypoint_loss_graph(*x, weight_loss=config.KEYPOINT_LOSS_WEIGHTING,
@@ -305,6 +307,7 @@ class MaskRCNN:
                 inputs.append(input_gt_keypoints)
             if self.training_mask:
                 inputs.append(input_gt_masks)
+                inputs.append(input_gt_masks_train)
             if not config.USE_RPN_ROIS:
                 inputs.append(input_rois)
 

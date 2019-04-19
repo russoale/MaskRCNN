@@ -129,10 +129,10 @@ class DataGenerator(KU.Sequence):
 
                 # If the image source is not to be augmented pass None as augmentation
                 if self.dataset.image_info[image_id]['source'] in self.no_augmentation_sources:
-                    image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints = \
+                    image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_train_mask = \
                         self.load_image_gt(image_id, augmentation=None, use_mini_mask=self.config.USE_MINI_MASK)
                 else:
-                    image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints = \
+                    image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_train_mask = \
                         self.load_image_gt(image_id, augmentation=self.augmentation,
                                            use_mini_mask=self.config.USE_MINI_MASK)
 
@@ -186,6 +186,7 @@ class DataGenerator(KU.Sequence):
                         batch_gt_masks = np.zeros(
                             (self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
                              self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
+                        batch_gt_masks_train = np.zeros(self.batch_size, dtype=gt_train_mask.dtype)
 
                     if self.random_rois:
                         batch_rpn_rois = np.zeros(
@@ -200,6 +201,7 @@ class DataGenerator(KU.Sequence):
                             if not (gt_masks is None):
                                 batch_mrcnn_mask = np.zeros(
                                     (self.batch_size,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
+                                batch_gt_masks_train = np.zeros(self.batch_size, dtype=gt_train_mask.dtype)
                             if not (gt_keypoints is None):
                                 batch_mrcnn_keypoints = np.zeros(
                                     (self.batch_size,) + mrcnn_keypoints.shape, dtype=mrcnn_keypoints.dtype)
@@ -215,6 +217,7 @@ class DataGenerator(KU.Sequence):
                     gt_boxes = gt_boxes[ids]
                     if not (gt_masks is None):
                         gt_masks = gt_masks[:, :, ids]
+                        gt_train_mask = gt_train_mask[ids]
                     if not (gt_keypoints is None):
                         gt_keypoints = gt_keypoints[ids, :]
 
@@ -227,6 +230,7 @@ class DataGenerator(KU.Sequence):
                 batch_gt_boxes[b, :gt_boxes.shape[0]] = gt_boxes
                 if not (gt_masks is None):
                     batch_gt_masks[b, :, :, :gt_masks.shape[-1]] = gt_masks
+                    batch_gt_masks_train[b] = gt_train_mask
                 if not (gt_keypoints is None):
                     batch_gt_keypoints[b, :gt_keypoints.shape[0], :, :] = gt_keypoints
 
@@ -238,6 +242,7 @@ class DataGenerator(KU.Sequence):
                         batch_mrcnn_bbox[b] = mrcnn_bbox
                         if not (gt_masks is None):
                             batch_mrcnn_mask[b] = mrcnn_mask
+                            batch_gt_masks_train[b] = gt_train_mask
                         if not (gt_keypoints is None):
                             batch_mrcnn_keypoints[b] = mrcnn_keypoints
                             batch_mrcnn_keypoint_weights[b] = mrcnn_keypoint_weights
@@ -262,6 +267,7 @@ class DataGenerator(KU.Sequence):
             inputs.append(batch_gt_keypoints)
         if not (gt_masks is None):
             inputs.append(batch_gt_masks)
+            inputs.append(batch_gt_masks_train)
         outputs = []
 
         if self.random_rois:
@@ -274,6 +280,7 @@ class DataGenerator(KU.Sequence):
                 outputs.extend([batch_mrcnn_class_ids, batch_mrcnn_bbox])
                 if not (gt_masks is None):
                     outputs.append(batch_mrcnn_mask)
+                    outputs.append(batch_gt_masks_train)
                 if not (gt_keypoints is None):
                     outputs.append([batch_mrcnn_keypoints, batch_mrcnn_keypoint_weights])
 
@@ -527,6 +534,7 @@ class DataGenerator(KU.Sequence):
         mask: [height, width, instance_count]. The height and width are those
             of the image unless use_mini_mask is True, in which case they are
             defined in MINI_MASK_SHAPE.
+        train_mask: 0 or 1. The multiplier for loss calculation
         """
         # Load image and mask
         image = self.dataset.load_image(image_id)
@@ -554,7 +562,7 @@ class DataGenerator(KU.Sequence):
 
         mask = None
         if self.training_mask:
-            mask, class_ids = self.dataset.load_mask(image_id)
+            mask, class_ids, train_mask = self.dataset.load_mask(image_id)
             mask = utils.resize_mask(mask, scale, padding, crop)
 
         # Augmentation
@@ -641,7 +649,7 @@ class DataGenerator(KU.Sequence):
         image_meta = compose_image_meta(image_id, original_shape, image.shape,
                                         window, scale, active_class_ids)
 
-        return image, image_meta, class_ids, bbox, mask, keypoints
+        return image, image_meta, class_ids, bbox, mask, keypoints, train_mask
 
     def build_rpn_targets(self, gt_class_ids, gt_boxes):
         """Given the anchors and GT boxes, compute overlaps and identify positive

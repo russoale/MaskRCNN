@@ -147,12 +147,14 @@ class Dataset(object):
             masks: A bool array of shape [height, width, instance count] with
                 a binary mask per instance.
             class_ids: a 1D array of class IDs of the instance masks.
+            mask_train: A 1D array with binary flag 0,1 to for mask loss
         """
         # Override this function to load a mask from your dataset.
         # Otherwise, it returns an empty mask.
         mask = np.empty([0, 0, 0])
         class_ids = np.empty([0], np.int32)
-        return mask, class_ids
+        mask_train = np.empty([0])
+        return mask, class_ids, mask_train
 
     def load_keypoints(self, image_id):
         """Load instance mask and keypoints for the given image.

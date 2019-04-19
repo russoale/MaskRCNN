@@ -431,6 +431,7 @@ class JumpDataset(dataset.Dataset):
         masks: A bool array of shape [height, width, instance count] with
             one mask per instance.
         class_ids: a 1D array of class IDs of the instance masks.
+        mask_train: A 1D array with binary flag 0,1 to for mask loss
         """
         # If not a COCO image, delegate to parent class.
         image_info = self.image_info[image_id]
@@ -438,6 +439,7 @@ class JumpDataset(dataset.Dataset):
             return super(JumpDataset, self).load_mask(image_id)
 
         instance_masks = []
+        train_masks = []
         class_ids = []
         annotations = self.image_info[image_id]["annotations"]
         # Build mask of shape [height, width, instance_count] and list
@@ -455,27 +457,33 @@ class JumpDataset(dataset.Dataset):
                 directory = os.path.join(MASK_JUMP_DIR, directory)
 
                 # print("checking if directory : {} exists".format(directory))
+                m = None
                 if os.path.isdir(directory):
                     m = self.pickle_to_mask(directory)
-                    if m is None:
-                        continue
-                else:
-                    continue
 
-                # Some objects are so small that they're less than 1 pixel area
-                # and end up rounded out. Skip those objects.
-                if m.max() < 1:
-                    print("no mask")
-                    continue
+                # multiplier for mask loss calculation
+                train = 0 if m is None else 1
+
+                # Some images don't have any segmentation annotations.
+                # To avoid skipping to many training examples generating empty mask
+                # will still allow the network to train with but need to be excluded from
+                # mask loss calculation.
+                if m is None:
+                    image = self.jump.imgs[image_id]
+                    height = image["height"]
+                    width = image["width"]
+                    m = np.zeros((height, width, 3)).astype(bool)
 
                 instance_masks.append(m)
+                train_masks.append(train)
                 class_ids.append(class_id)
 
         # Pack instance masks into an array
         if class_ids:
             mask = np.squeeze(instance_masks)[:, :, :1]
+            mask_train = np.asarray(train_masks)
             class_ids = np.array(class_ids, dtype=np.int32)
-            return mask, class_ids
+            return mask, class_ids, mask_train
         else:
             # Call super class to return an empty mask
             return super(JumpDataset, self).load_mask(image_id)

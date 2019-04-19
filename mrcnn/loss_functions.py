@@ -141,7 +141,7 @@ def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
     return loss
 
 
-def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
+def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks, input_gt_masks_train):
     """Mask binary cross-entropy loss for the masks head.
 
     target_masks: [batch, num_rois, height, width].
@@ -149,6 +149,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
     target_class_ids: [batch, num_rois]. Integer class IDs. Zero padded.
     pred_masks: [batch, proposals, height, width, num_classes] float32 tensor
                 with values from 0 to 1.
+    input_gt_masks_train: A float32 tensor of values 0 or 1
     """
     # Reshape for simplicity. Merge first two dimensions into one.
     target_class_ids = K.reshape(target_class_ids, (-1,))
@@ -177,7 +178,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
                     K.binary_crossentropy(target=y_true, output=y_pred),
                     tf.constant(0.0))
     loss = K.mean(loss)
-    return loss
+    return loss * input_gt_masks_train
 
 
 def keypoint_weight_loss_graph(target_keypoint_weight, pred_class, target_class_ids):
