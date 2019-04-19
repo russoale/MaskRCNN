@@ -77,7 +77,7 @@ class JumpConfig(Config):
 
     KEYPOINT_MASK_POOL_SIZE = 14
 
-    LEARNING_RATE = 0.002
+    LEARNING_RATE = 0.001
 
     STEPS_PER_EPOCH = 704
 
