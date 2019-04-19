@@ -177,8 +177,9 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks, input_gt_m
     loss = K.switch(tf.size(y_true) > 0,
                     K.binary_crossentropy(target=y_true, output=y_pred),
                     tf.constant(0.0))
+    loss = loss * input_gt_masks_train
     loss = K.mean(loss)
-    return loss * input_gt_masks_train
+    return loss
 
 
 def keypoint_weight_loss_graph(target_keypoint_weight, pred_class, target_class_ids):
