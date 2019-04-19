@@ -454,7 +454,7 @@ class JumpDataset(dataset.Dataset):
                 # check if segmentation available
                 directory = os.path.join(MASK_JUMP_DIR, directory)
 
-                #print("checking if directory : {} exists".format(directory))
+                # print("checking if directory : {} exists".format(directory))
                 if os.path.isdir(directory):
                     m = self.pickle_to_mask(directory)
                     if m is None:
@@ -473,7 +473,7 @@ class JumpDataset(dataset.Dataset):
 
         # Pack instance masks into an array
         if class_ids:
-            mask = np.stack(instance_masks, axis=2)
+            mask = np.squeeze(instance_masks)[:, :, :1]
             class_ids = np.array(class_ids, dtype=np.int32)
             return mask, class_ids
         else:
