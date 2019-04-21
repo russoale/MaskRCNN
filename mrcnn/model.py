@@ -130,7 +130,7 @@ class MaskRCNN:
                         shape=[config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1], None],
                         name="input_gt_masks", dtype=bool)
 
-                input_gt_masks_train = KL.Input(shape=[1], name="input_gt_masks_train", dtype=tf.float32)
+                input_gt_masks_train = KL.Input(shape=[1], name="input_gt_masks_train", dtype=tf.int32)
 
             if self.training_keypoint:
                 # 4. GT Keypoint

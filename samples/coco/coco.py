@@ -471,7 +471,6 @@ class CocoDataset(dataset.Dataset):
             return super(CocoDataset, self).load_mask(image_id)
 
         instance_masks = []
-        train_masks = []
         class_ids = []
         annotations = self.image_info[image_id]["annotations"]
         # Build mask of shape [height, width, instance_count] and list
@@ -482,7 +481,6 @@ class CocoDataset(dataset.Dataset):
             if class_id:
                 m = self.ann_to_mask(annotation, image_info["height"],
                                      image_info["width"])
-                train = 1
                 # Some objects are so small that they're less than 1 pixel area
                 # and end up rounded out. Skip those objects.
                 if m.max() < 1:
@@ -496,13 +494,12 @@ class CocoDataset(dataset.Dataset):
                     if m.shape[0] != image_info["height"] or m.shape[1] != image_info["width"]:
                         m = np.ones([image_info["height"], image_info["width"]], dtype=bool)
                 instance_masks.append(m)
-                train_masks.append(train)
                 class_ids.append(class_id)
 
         # Pack instance masks into an array
         if class_ids:
             mask = np.stack(instance_masks, axis=2).astype(np.bool)
-            mask_train = np.asarray(train_masks)
+            mask_train = np.asarray(np.int32(1))
             class_ids = np.array(class_ids, dtype=np.int32)
             return mask, class_ids, mask_train
         else:

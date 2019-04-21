@@ -566,7 +566,8 @@ class DataGenerator(KU.Sequence):
             mask = utils.resize_mask(mask, scale, padding, crop)
 
         # Augmentation
-        # This requires the imgaug lib (https://github.com/aleju/imgaug)
+        # This requires the fork of original imgaug lib (https://github.com/aleju/imgaug)
+        # on https://github.com/russoale/imgaug!!!
         if augmentation:
             import imgaug
 
@@ -617,18 +618,18 @@ class DataGenerator(KU.Sequence):
                 assert bbox.shape == bbox_shape, "Augmentation shouldn't change bbox size"
 
         if self.training_mask:
-            # Note that some boxes might be all zeros if the corresponding mask got cropped out.
-            # and here is to filter them out
-            _idx = np.sum(mask, axis=(0, 1)) > 0
-            mask = mask[:, :, _idx]
-            class_ids = class_ids[_idx]
-
-            # Bounding boxes. Note that some boxes might be all zeros
-            # if the corresponding mask got cropped out.
-            # bbox: [num_instances, (y1, x1, y2, x2)]
-            # print("mask shape:",np.shape(mask))
-            # print("keypoint mask shape:",np.shape(keypoint_mask))
-            bbox = utils.extract_bboxes(mask)
+            # Bounding boxes. Note that some mask might be all zeros
+            # if segmentation annotation is not available or got cropped out.
+            # - always generate bbox from mask if available
+            # - if not check bbox was already generated from keypoints
+            # - else filter them out
+            if mask.max() > 0:
+                bbox = utils.extract_bboxes(mask)
+            elif bbox is None:
+                _idx = np.sum(mask, axis=(0, 1)) > 0
+                mask = mask[:, :, _idx]
+                class_ids = class_ids[_idx]
+                bbox = np.empty(0)
 
         # Active classes
         # Different datasets have different classes, so track the

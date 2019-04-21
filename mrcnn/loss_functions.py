@@ -156,10 +156,14 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks, input_gt_m
     mask_shape = tf.shape(target_masks)
     target_masks = K.reshape(target_masks, (-1, mask_shape[2], mask_shape[3]))
     pred_shape = tf.shape(pred_masks)
-    pred_masks = K.reshape(pred_masks,
-                           (-1, pred_shape[2], pred_shape[3], pred_shape[4]))
+    pred_masks = K.reshape(pred_masks, (-1, pred_shape[2], pred_shape[3], pred_shape[4]))
+
     # Permute predicted masks to [N, num_classes, height, width]
     pred_masks = tf.transpose(pred_masks, [0, 3, 1, 2])
+
+    # Filter mask out which should not be included in loss
+    filter_ix = tf.where(input_gt_masks_train < 1)
+    tf.gather(target_masks, filter_ix)
 
     # Only positive ROIs contribute to the loss. And only
     # the class specific mask of each ROI.
@@ -177,7 +181,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks, input_gt_m
     loss = K.switch(tf.size(y_true) > 0,
                     K.binary_crossentropy(target=y_true, output=y_pred),
                     tf.constant(0.0))
-    loss = loss * input_gt_masks_train
+
     loss = K.mean(loss)
     return loss
 

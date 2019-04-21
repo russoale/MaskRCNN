@@ -11,6 +11,7 @@ import numpy as np
 import os
 from numpy import pi
 from pycocotools import mask as maskUtils
+from imgaug import augmenters as iaa
 
 # Root directory of the project
 
@@ -54,7 +55,7 @@ class JumpConfig(Config):
 
     IMAGES_PER_GPU = 1
 
-    GPU_COUNT = 2
+    GPU_COUNT = 4
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 1  # Person and background
@@ -470,9 +471,9 @@ class JumpDataset(dataset.Dataset):
                 # mask loss calculation.
                 if m is None:
                     image = self.jump.imgs[image_id]
-                    height = image["height"]
                     width = image["width"]
-                    m = np.zeros((height, width, 3)).astype(bool)
+                    height = image["height"]
+                    m = np.zeros((width, height, 3)).astype(bool)
 
                 instance_masks.append(m)
                 train_masks.append(train)
@@ -481,7 +482,7 @@ class JumpDataset(dataset.Dataset):
         # Pack instance masks into an array
         if class_ids:
             mask = np.squeeze(instance_masks)[:, :, :1]
-            mask_train = np.asarray(train_masks)
+            mask_train = np.asarray(np.int32(max(train_masks)))
             class_ids = np.array(class_ids, dtype=np.int32)
             return mask, class_ids, mask_train
         else:
@@ -787,8 +788,21 @@ if __name__ == '__main__':
         exclude = ["mrcnn_keypoint_mask_deconv"]
 
         # Image Augmentation
-        # Right/Left flip 50% of the time
-        augmentation = augmenter.FliplrKeypoint(0.5, config=config, dataset=dataset_train)
+        augmentation = iaa.Sequential([
+            augmenter.FliplrKeypoint(0.5, config=config, dataset=dataset_train),
+            iaa.Crop(percent=(0, 0.2)),
+            iaa.Sometimes(0.5, iaa.GaussianBlur(sigma=(0, 0.5))),
+            iaa.ContrastNormalization((0.75, 1.5)),
+            iaa.Multiply((0.8, 1.2), per_channel=0.2),
+            iaa.Affine(
+                scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                rotate=(-25, 25),
+                shear=(-8, 8)
+            ),
+            iaa.AssertShape((None, 1024, 1024, 3))
+        ], random_order=True)
+
 
         # training phase schedule
         lr_values = [config.LEARNING_RATE * 2,
