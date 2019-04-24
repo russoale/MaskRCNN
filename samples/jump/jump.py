@@ -470,10 +470,13 @@ class JumpDataset(dataset.Dataset):
                 # will still allow the network to train with but need to be excluded from
                 # mask loss calculation.
                 if m is None:
-                    image = self.jump.imgs[image_id]
-                    width = image["width"]
-                    height = image["height"]
-                    m = np.zeros((width, height, 3)).astype(bool)
+                    # image = self.jump.imgs[image_id]
+                    # width = image["width"]
+                    # height = image["height"]
+                    # Annotations for pictures might be switched in some cases
+                    # general all pictures in Jump dataset are of shape (WxHxC) 1920 x 1080 x 3
+                    # image: [height, width, 3]
+                    m = np.zeros((1080, 1920, 3)).astype(bool)
 
                 instance_masks.append(m)
                 train_masks.append(train)
