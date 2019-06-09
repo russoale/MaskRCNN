@@ -1,9 +1,9 @@
 import logging
-import os
 
 import imgaug as ia
 import keras.utils as KU
 import numpy as np
+import os
 
 from mrcnn import utils
 from mrcnn.data_formatting import compose_image_meta, mold_image
@@ -183,10 +183,10 @@ class DataGenerator(KU.Sequence):
                         batch_gt_keypoints = np.zeros(
                             (self.batch_size, self.config.MAX_GT_INSTANCES, self.config.NUM_KEYPOINTS, 3))
                     if not (gt_masks is None):
-                        batch_gt_masks = np.zeros(
-                            (self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
-                             self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
-                        batch_gt_masks_train = np.zeros(self.batch_size, dtype=gt_train_mask.dtype)
+                        batch_gt_masks = np.zeros((self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
+                                                   self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
+                        batch_gt_masks_train = np.zeros(
+                            (self.batch_size, self.config.MAX_GT_INSTANCES), dtype=np.int32)
 
                     if self.random_rois:
                         batch_rpn_rois = np.zeros(
@@ -201,7 +201,8 @@ class DataGenerator(KU.Sequence):
                             if not (gt_masks is None):
                                 batch_mrcnn_mask = np.zeros(
                                     (self.batch_size,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
-                                batch_gt_masks_train = np.zeros(self.batch_size, dtype=gt_train_mask.dtype)
+                                batch_gt_masks_train = np.zeros(
+                                    (self.batch_size, self.config.MAX_GT_INSTANCES), dtype=gt_train_mask.dtype)
                             if not (gt_keypoints is None):
                                 batch_mrcnn_keypoints = np.zeros(
                                     (self.batch_size,) + mrcnn_keypoints.shape, dtype=mrcnn_keypoints.dtype)
@@ -230,7 +231,7 @@ class DataGenerator(KU.Sequence):
                 batch_gt_boxes[b, :gt_boxes.shape[0]] = gt_boxes
                 if not (gt_masks is None):
                     batch_gt_masks[b, :, :, :gt_masks.shape[-1]] = gt_masks
-                    batch_gt_masks_train[b] = gt_train_mask
+                    batch_gt_masks_train[b, :gt_train_mask.shape[0]] = gt_train_mask
                 if not (gt_keypoints is None):
                     batch_gt_keypoints[b, :gt_keypoints.shape[0], :, :] = gt_keypoints
 
@@ -534,7 +535,7 @@ class DataGenerator(KU.Sequence):
         mask: [height, width, instance_count]. The height and width are those
             of the image unless use_mini_mask is True, in which case they are
             defined in MINI_MASK_SHAPE.
-        train_mask: 0 or 1. The multiplier for loss calculation
+        train_mask: [instance_count, 0 or 1]. The flag to turn on/off mask loss for given instance
         """
         # Load image and mask
         image = self.dataset.load_image(image_id)
@@ -561,6 +562,7 @@ class DataGenerator(KU.Sequence):
                 bbox = self.dataset.get_bbox_from_keypoints(keypoints, image.shape)
 
         mask = None
+        train_mask = None
         if self.training_mask:
             mask, class_ids, train_mask = self.dataset.load_mask(image_id)
             mask = utils.resize_mask(mask, scale, padding, crop)

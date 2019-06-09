@@ -471,10 +471,12 @@ class CocoDataset(dataset.Dataset):
             return super(CocoDataset, self).load_mask(image_id)
 
         instance_masks = []
+        train_masks = []
         class_ids = []
         annotations = self.image_info[image_id]["annotations"]
         # Build mask of shape [height, width, instance_count] and list
         # of class IDs that correspond to each channel of the mask.
+        # start_time = time.time()
         for annotation in annotations:
             class_id = self.map_source_class_id(
                 "coco.{}".format(annotation['category_id']))
@@ -494,12 +496,14 @@ class CocoDataset(dataset.Dataset):
                     if m.shape[0] != image_info["height"] or m.shape[1] != image_info["width"]:
                         m = np.ones([image_info["height"], image_info["width"]], dtype=bool)
                 instance_masks.append(m)
+                train_masks.append(1)
                 class_ids.append(class_id)
 
+        # print("--- %s seconds ---" % (time.time() - start_time))
         # Pack instance masks into an array
         if class_ids:
             mask = np.stack(instance_masks, axis=2).astype(np.bool)
-            mask_train = np.asarray(np.int32(1))
+            mask_train = np.array(train_masks, dtype=np.int32)
             class_ids = np.array(class_ids, dtype=np.int32)
             return mask, class_ids, mask_train
         else:

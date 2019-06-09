@@ -1,17 +1,16 @@
 import itertools
 import json
 import pickle
-
-import re
 import sys
 import time
 from collections import defaultdict
 
 import numpy as np
 import os
+import re
+from imgaug import augmenters as iaa
 from numpy import pi
 from pycocotools import mask as maskUtils
-from imgaug import augmenters as iaa
 
 # Root directory of the project
 
@@ -28,6 +27,8 @@ from mrcnn.config import Config
 
 # path to MSCOCO dataset
 JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "mscoco_format")
+# JUMP_DIR_IMAGE = os.path.join(DATA_DIR, "russales", "JumpDataset", "mscoco_format")
+# JUMP_DIR = os.path.join(DATA_DIR, "russales")
 MASK_JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "Segmentation_masks", "annotierte_daten_springer")
 
 # keypoint and mask pretrained weights
@@ -304,6 +305,7 @@ class JumpDataset(dataset.Dataset):
         jump = JUMP("{}/annotations/keypoints_{}.json".format(dataset_dir, subset))
         self.jump = jump
         image_dir = "{}/{}".format(dataset_dir, subset)
+        # image_dir = "{}/{}".format(JUMP_DIR_IMAGE, subset)
 
         # # Add classes
         if not class_ids:
@@ -445,10 +447,13 @@ class JumpDataset(dataset.Dataset):
         annotations = self.image_info[image_id]["annotations"]
         # Build mask of shape [height, width, instance_count] and list
         # of class IDs that correspond to each channel of the mask.
+        # start_time = time.time()
         for annotation in annotations:
             class_id = self.map_source_class_id(
                 "jump.{}".format(annotation['category_id']))
             if class_id:
+                # m = self.ann_to_mask(annotation, image_info["height"], image_info["width"])
+
                 image_id = annotation["image_id"]
                 # remove .jpeg file type
                 file_name = self.jump.imgs[image_id]['file_name'][:-5]
@@ -482,15 +487,47 @@ class JumpDataset(dataset.Dataset):
                 train_masks.append(train)
                 class_ids.append(class_id)
 
+        # print("--- %s seconds ---" % (time.time() - start_time))
         # Pack instance masks into an array
         if class_ids:
             mask = np.squeeze(instance_masks)[:, :, :1]
-            mask_train = np.asarray(np.int32(max(train_masks)))
+            mask_train = np.array(train_masks, dtype=np.int32)
             class_ids = np.array(class_ids, dtype=np.int32)
             return mask, class_ids, mask_train
         else:
             # Call super class to return an empty mask
             return super(JumpDataset, self).load_mask(image_id)
+
+    def ann_to_rle(self, ann, height, width):
+        """
+        Convert annotation which can be polygons, uncompressed RLE to RLE.
+        :return: binary mask (numpy 2D array)
+        """
+        if 'segmentation' in ann:
+            segm = ann['segmentation']
+            if isinstance(segm, list):
+                # polygon -- a single object might consist of multiple parts
+                # we merge all parts into one mask rle code
+                rles = maskUtils.frPyObjects(segm, height, width)
+                rle = maskUtils.merge(rles)
+            elif isinstance(segm['counts'], list):
+                # uncompressed RLE
+                rle = maskUtils.frPyObjects(segm, height, width)
+            else:
+                # rle
+                rle = ann['segmentation']
+            return rle
+        else:
+            return None
+
+    def ann_to_mask(self, ann, height, width):
+        """
+        Convert annotation which can be polygons, uncompressed RLE, or RLE to binary mask.
+        :return: binary mask (numpy 2D array)
+        """
+        rle = self.ann_to_rle(ann, height, width)
+        m = None if rle is None else maskUtils.decode(rle)
+        return m
 
     def pickle_to_mask(self, directory):
         """
@@ -794,18 +831,17 @@ if __name__ == '__main__':
         augmentation = iaa.Sequential([
             augmenter.FliplrKeypoint(0.5, config=config, dataset=dataset_train),
             iaa.Crop(percent=(0, 0.2)),
-            iaa.Sometimes(0.5, iaa.GaussianBlur(sigma=(0, 0.5))),
-            iaa.ContrastNormalization((0.75, 1.5)),
-            iaa.Multiply((0.8, 1.2), per_channel=0.2),
+            # iaa.Sometimes(0.5, iaa.GaussianBlur(sigma=(0, 0.5))),
+            # iaa.ContrastNormalization((0.75, 1.5)),
+            # iaa.Multiply((0.8, 1.2), per_channel=0.2),
             iaa.Affine(
-                scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                # scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
                 translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
                 rotate=(-25, 25),
-                shear=(-8, 8)
+                # shear=(-8, 8)
             ),
-            iaa.AssertShape((None, 1024, 1024, 3))
+            # iaa.AssertShape((None, 1024, 1024, 3))
         ], random_order=True)
-
 
         # training phase schedule
         lr_values = [config.LEARNING_RATE * 2,

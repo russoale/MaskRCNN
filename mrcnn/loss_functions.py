@@ -141,7 +141,7 @@ def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
     return loss
 
 
-def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks, input_gt_masks_train):
+def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks, target_mask_train):
     """Mask binary cross-entropy loss for the masks head.
 
     target_masks: [batch, num_rois, height, width].
@@ -149,7 +149,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks, input_gt_m
     target_class_ids: [batch, num_rois]. Integer class IDs. Zero padded.
     pred_masks: [batch, proposals, height, width, num_classes] float32 tensor
                 with values from 0 to 1.
-    input_gt_masks_train: A float32 tensor of values 0 or 1
+    target_mask_train: A float32 tensor of values 0 or 1
     """
     # Reshape for simplicity. Merge first two dimensions into one.
     target_class_ids = K.reshape(target_class_ids, (-1,))
@@ -161,16 +161,15 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks, input_gt_m
     # Permute predicted masks to [N, num_classes, height, width]
     pred_masks = tf.transpose(pred_masks, [0, 3, 1, 2])
 
-    # Filter mask out which should not be included in loss
-    filter_ix = tf.where(input_gt_masks_train < 1)
-    tf.gather(target_masks, filter_ix)
-
     # Only positive ROIs contribute to the loss. And only
     # the class specific mask of each ROI.
     positive_ix = tf.where(target_class_ids > 0)[:, 0]
-    positive_class_ids = tf.cast(
-        tf.gather(target_class_ids, positive_ix), tf.int64)
+    positive_class_ids = tf.cast(tf.gather(target_class_ids, positive_ix), tf.int64)
     indices = tf.stack([positive_ix, positive_class_ids], axis=1)
+
+    # Filter mask out which should not be included in loss
+    train_idx = tf.where(target_mask_train > 0)[:, 0]
+    target_masks = tf.gather(target_masks, train_idx)
 
     # Gather the masks (predicted and true) that contribute to loss
     y_true = tf.gather(target_masks, positive_ix)

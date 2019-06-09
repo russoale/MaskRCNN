@@ -106,8 +106,7 @@ class MaskRCNN:
 
             # Detection GT (class IDs, bounding boxes, and masks)
             # 1. GT Class IDs (zero padded)
-            input_gt_class_ids = KL.Input(
-                shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+            input_gt_class_ids = KL.Input(shape=[None], name="input_gt_class_ids", dtype=tf.int32)
 
             # 2. GT Boxes in pixels (zero padded)
             # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
@@ -122,15 +121,14 @@ class MaskRCNN:
                 # [batch, height, width, MAX_GT_INSTANCES]
                 if config.USE_MINI_MASK:
                     input_gt_masks = KL.Input(
-                        shape=[config.MINI_MASK_SHAPE[0],
-                               config.MINI_MASK_SHAPE[1], None],
+                        shape=[config.MINI_MASK_SHAPE[0], config.MINI_MASK_SHAPE[1], None],
                         name="input_gt_masks", dtype=bool)
                 else:
                     input_gt_masks = KL.Input(
                         shape=[config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1], None],
                         name="input_gt_masks", dtype=bool)
 
-                input_gt_masks_train = KL.Input(shape=[1], name="input_gt_masks_train", dtype=tf.int32)
+                input_gt_masks_train = KL.Input(shape=[None], name="input_gt_masks_train", dtype=tf.int32)
 
             if self.training_keypoint:
                 # 4. GT Keypoint
@@ -244,17 +242,17 @@ class MaskRCNN:
             # padded. Equally, returned rois and targets are zero padded.
 
             if self.training_mask and self.training_keypoint:
-                rois, target_class_ids, target_bbox, target_keypoint, target_keypoint_weight, target_mask = \
+                rois, target_class_ids, target_bbox, target_keypoint, target_keypoint_weight, target_mask, target_mask_train = \
                     DetectionKeypointMaskTargetLayer(config, name="proposal_targets")([
-                        target_rois, input_gt_class_ids, gt_boxes, gt_keypoints, input_gt_masks])
+                        target_rois, input_gt_class_ids, gt_boxes, gt_keypoints, input_gt_masks, input_gt_masks_train])
             elif self.training_keypoint:
                 rois, target_class_ids, target_bbox, target_keypoint, target_keypoint_weight = \
                     DetectionKeypointTargetLayer(config, name="proposal_targets")([
                         target_rois, input_gt_class_ids, gt_boxes, gt_keypoints])
             else:
-                rois, target_class_ids, target_bbox, target_mask = \
+                rois, target_class_ids, target_bbox, target_mask, target_mask_train = \
                     DetectionMaskTargetLayer(config, name="proposal_targets")([
-                        target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
+                        target_rois, input_gt_class_ids, gt_boxes, input_gt_masks, input_gt_masks_train])
 
             # Network Heads
             # TODO: verify that this handles zero padded ROIs
@@ -291,13 +289,13 @@ class MaskRCNN:
 
             if self.training_mask:
                 mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
-                    [target_mask, target_class_ids, mrcnn_mask, input_gt_masks_train])
+                    [target_mask, target_class_ids, mrcnn_mask, target_mask_train])
             if self.training_keypoint:
-                keypoint_loss = KL.Lambda(
-                    lambda x: mrcnn_keypoint_loss_graph(*x, weight_loss=config.KEYPOINT_LOSS_WEIGHTING,
-                                                        mask_shape=config.KEYPOINT_MASK_SHAPE,
-                                                        number_point=config.NUM_KEYPOINTS),
-                    name="mrcnn_keypoint_loss")(
+                keypoint_loss = KL.Lambda(lambda x: mrcnn_keypoint_loss_graph(
+                    *x,
+                    weight_loss=config.KEYPOINT_LOSS_WEIGHTING,
+                    mask_shape=config.KEYPOINT_MASK_SHAPE,
+                    number_point=config.NUM_KEYPOINTS), name="mrcnn_keypoint_loss")(
                     [target_keypoint, target_keypoint_weight, target_class_ids, mrcnn_keypoint])
 
             # Model
@@ -773,7 +771,7 @@ class MaskRCNN:
         for i, image in enumerate(images):
             final_bboxes, final_class_ids, final_scores, final_keypoints = \
                 utils.unmold_keypoint_detections(self.config, image.shape, molded_images[i].shape, detections[i],
-                                                      windows[i], mrcnn_keypoint[i])
+                                                 windows[i], mrcnn_keypoint[i])
             results.append({
                 "bboxes": final_bboxes,
                 "class_ids": final_class_ids,
