@@ -5,16 +5,17 @@ import json
 import pickle
 from unittest import TestCase
 
+import copy
 import numpy as np
 import os
+import random
 import re
-import copy
 from PIL import Image, ImageDraw
 from imgaug import augmenters as iaa
 from pycocotools import mask as maskUtils
 from skimage import measure
 
-from mrcnn import augmenter
+from mrcnn import augmenter, utils
 from mrcnn import data_generator, visualize
 from samples.jump import jump
 
@@ -34,11 +35,11 @@ class JumpTests(TestCase):
         config.display()
         return config
 
-    def load_dataset(self):
+    def load_dataset(self, set="val"):
         # Validation dataset
         JUMP_DIR = os.path.abspath("/data/hdd/russales/JumpDataset/mscoco_format")
         dataset = jump.JumpDataset()
-        dataset.load_jump(JUMP_DIR, "val")
+        dataset.load_jump(JUMP_DIR, "%s" % set)
         dataset.prepare()
         print("Images: {}\nClasses: {}".format(len(dataset.image_ids), dataset.class_names))
         return dataset
@@ -71,13 +72,11 @@ class JumpTests(TestCase):
     def test_mask_augmentation(self):
         # load image and ground truth data
         config = self.load_test_config(None)
-        dataset = self.load_dataset()
+        dataset = self.load_dataset("train")
         dg = data_generator.DataGenerator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
 
-        # image_id = random.choice(dataset.image_ids)
-        image_id = 88
-        image_id = 6
-
+        image_id = random.choice(dataset.image_ids)
+        # image_id = 2666
         info = dataset.image_info[image_id]
         print("image ID: {}.{} ({}) {}".format(info["source"], info["id"], image_id,
                                                dataset.image_reference(image_id)))
@@ -98,13 +97,15 @@ class JumpTests(TestCase):
         ], random_order=True)
 
         image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
-            dg.load_image_gt(image_id, augmentation=augmentation, use_mini_mask=False)
+            dg.load_image_gt(image_id, augmentation=augmentation, use_mini_mask=True)
 
-        # visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names,
-        #                            title="Original", dataset=dataset)
-
-        visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids,
-                                    dataset.class_names, title="Original")
+        if gt_masks.max() > 0:
+            gt_masks = utils.expand_mask(gt_boxes, gt_masks, image.shape)
+            visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids,
+                                        dataset.class_names, title="Original")
+        else:
+            visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names,
+                                        title="Original", dataset=dataset)
         pass
 
     def test_mask_into_annotation_json(self):
@@ -196,7 +197,6 @@ class JumpTests(TestCase):
                                     img = Image.new('L', (m.shape[0], m.shape[1]), 0)
                                     ImageDraw.Draw(img).polygon(contour, outline=1, fill=1)
                                     mask = np.array(img)
-
 
     def test_polygon(self):
         import json

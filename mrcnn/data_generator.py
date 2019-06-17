@@ -645,7 +645,12 @@ class DataGenerator(KU.Sequence):
 
         # Resize masks to smaller size to reduce memory usage
         if use_mini_mask and self.training_mask:
-            mask = utils.minimize_mask(bbox, mask, self.config.MINI_MASK_SHAPE)
+            # some bboxes based on keypoints moved out of valid image space after augmentation
+            # therefore generate minimized mask based
+            if bbox.min() > 0:
+                mask = utils.minimize_mask(bbox, mask, self.config.MINI_MASK_SHAPE)
+            else:
+                mask = np.zeros(self.config.MINI_MASK_SHAPE).astype(bool)
 
         # Image meta data
         # image_meta:image_id,image_shape,windows.active_class_ids

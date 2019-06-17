@@ -53,9 +53,7 @@ class JumpConfig(Config):
 
     # Configuration name
     NAME = "jump"
-
-    IMAGES_PER_GPU = 1
-
+    IMAGES_PER_GPU = 2
     GPU_COUNT = 4
 
     # Number of classes (including background)
@@ -64,33 +62,23 @@ class JumpConfig(Config):
     BACKBONE = "resnet50"
 
     NUM_KEYPOINTS = 20
-
     KEYPOINT_MASK_SHAPE = [56, 56]
-
-    TRAIN_ROIS_PER_IMAGE = 50
-
-    MAX_GT_INSTANCES = 128
-
-    RPN_TRAIN_ANCHORS_PER_IMAGE = 150
-
-    USE_MINI_MASK = False
-
-    DETECTION_MAX_INSTANCES = 50
-
     KEYPOINT_MASK_POOL_SIZE = 14
-
-    LEARNING_RATE = 0.001
-
-    STEPS_PER_EPOCH = 704
-
-    VALIDATION_STEPS = 49
-
     KEYPOINT_THRESHOLD = 0.005
-
     PART_STR = ['head', 'neck', 'r_shoulder', 'r_elbow', 'r_wrist', 'r_hand', 'l_shoulder', 'l_elbow', 'l_wrist',
                 'l_hand', 'r_hip', 'r_knee', 'r_ankle', 'r_heel', 'r_toetip', 'l_hip', 'l_knee', 'l_ankle',
                 'l_heel', 'l_toetip']
     # LIMBS = [0,-1,-1,5,-1,6,5,7,6,8,7,9,8,10,11,13,12,14,13,15,14,16]
+
+    TRAIN_ROIS_PER_IMAGE = 30
+    MAX_GT_INSTANCES = 128
+    RPN_TRAIN_ANCHORS_PER_IMAGE = 150
+    USE_MINI_MASK = True
+    DETECTION_MAX_INSTANCES = 25
+
+    LEARNING_RATE = 0.001
+    STEPS_PER_EPOCH = 704
+    VALIDATION_STEPS = 49
 
 
 ############################################################
@@ -454,9 +442,10 @@ class JumpDataset(dataset.Dataset):
             if class_id:
                 # m = self.ann_to_mask(annotation, image_info["height"], image_info["width"])
 
-                image_id = annotation["image_id"]
+                idx = annotation["image_id"]
+                # print("Image Id: {}, length of images: {}".format(idx, len(self.jump.imgs)))
                 # remove .jpeg file type
-                file_name = self.jump.imgs[image_id]['file_name'][:-5]
+                file_name = self.jump.imgs[idx]['file_name'][:-5]
                 # create directory pattern
                 directory = re.sub("_", "_(0", file_name) + ")"
                 # check if segmentation available
