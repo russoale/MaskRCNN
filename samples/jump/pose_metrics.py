@@ -9,11 +9,11 @@ Collection of helpers to calculate pose estimation metrics.
 """
 
 import numpy as np
-import math
 import warnings
-from data_handling.bisp_joint_order import JumpJointOrder
 
-    
+from samples.jump.bisp_joint_order import JumpJointOrder
+
+
 def pck_normalized_distances(predictions, annotations):
     """
     DEPRECATED. Use pck_normalized_distances_fast instead
@@ -173,8 +173,11 @@ if __name__ == "__main__":
 
     # Test annotations with invalid reference joints and fallback distances
     fallback_dist = np.array([16])
-    print(pck_normalized_distances_fast(prediction, annotation_any_joint_invalid,
-                                        ref_length_indices=(JumpJointOrder.l_shoulder, JumpJointOrder.r_hip),
-                                        fallback_ref_lengths=fallback_dist))
-    
+    fast = pck_normalized_distances_fast(prediction, annotation_any_joint_invalid,
+                                         ref_length_indices=(JumpJointOrder.l_shoulder, JumpJointOrder.r_hip),
+                                         fallback_ref_lengths=fallback_dist)
+    print(fast)
+    pck_thresholds, pck_scores = pck_scores_from_normalized_distances(fast)
+    print(pck_thresholds, pck_scores)
+    print(pck_score_at_threshold(pck_thresholds, pck_scores, 0.9))
     

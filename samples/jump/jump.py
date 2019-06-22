@@ -1,3 +1,4 @@
+import copy
 import itertools
 import json
 import pickle
@@ -113,6 +114,7 @@ class JUMP:
         imgToAnns, catToImgs = defaultdict(list), defaultdict(list)
         if 'annotations' in self.dataset:
             for ann in self.dataset['annotations']:
+                ann['iscrowd'] = 0
                 imgToAnns[ann['image_id']].append(ann)
                 anns[ann['id']] = ann
 
@@ -264,6 +266,148 @@ class JUMP:
                 'category_id': int(data[i, 6]),
             }]
         return ann
+
+    def loadRes(self, resFile):
+        """
+        Load result file and return a result api object.
+        :param   resFile (str)     : file name of result file
+        :return: res (obj)         : result api object
+        """
+        res = JUMP()
+        res.dataset['images'] = [img for img in self.dataset['images']]
+
+        print('Loading and preparing results...')
+        tic = time.time()
+        # Check result type in a way compatible with Python 2 and 3.
+        try:
+            is_string = isinstance(resFile, basestring)  # Python 2
+        except NameError:
+            is_string = isinstance(resFile, str)  # Python 3
+        if is_string:
+            anns = json.load(open(resFile))
+        elif type(resFile) == np.ndarray:
+            anns = self.loadNumpyAnnotations(resFile)
+        else:
+            anns = resFile
+        assert type(anns) == list, 'results in not an array of objects'
+        annsImgIds = [ann['image_id'] for ann in anns]
+        assert set(annsImgIds) == (set(annsImgIds) & set(self.getImgIds())), \
+            'Results do not correspond to current coco set'
+        if 'caption' in anns[0]:
+            imgIds = set([img['id'] for img in res.dataset['images']]) & set([ann['image_id'] for ann in anns])
+            res.dataset['images'] = [img for img in res.dataset['images'] if img['id'] in imgIds]
+            for id, ann in enumerate(anns):
+                ann['id'] = id + 1
+        elif 'bbox' in anns[0] and not anns[0]['bbox'] == []:
+            res.dataset['categories'] = copy.deepcopy(self.dataset['categories'])
+            for id, ann in enumerate(anns):
+                bb = ann['bbox']
+                x1, x2, y1, y2 = [bb[0], bb[0] + bb[2], bb[1], bb[1] + bb[3]]
+                if not 'segmentation' in ann:
+                    ann['segmentation'] = [[x1, y1, x1, y2, x2, y2, x2, y1]]
+                ann['area'] = bb[2] * bb[3]
+                ann['id'] = id + 1
+                ann['iscrowd'] = 0
+        elif 'segmentation' in anns[0]:
+            res.dataset['categories'] = copy.deepcopy(self.dataset['categories'])
+            for id, ann in enumerate(anns):
+                # now only support compressed RLE format as segmentation results
+                ann['area'] = maskUtils.area(ann['segmentation'])
+                if not 'bbox' in ann:
+                    ann['bbox'] = maskUtils.toBbox(ann['segmentation'])
+                ann['id'] = id + 1
+                ann['iscrowd'] = 0
+        elif 'keypoints' in anns[0]:
+            res.dataset['categories'] = copy.deepcopy(self.dataset['categories'])
+            for id, ann in enumerate(anns):
+                s = ann['keypoints']
+                x = s[0::3]
+                y = s[1::3]
+                x0, x1, y0, y1 = np.min(x), np.max(x), np.min(y), np.max(y)
+                ann['area'] = (x1 - x0) * (y1 - y0)
+                ann['id'] = id + 1
+                ann['bbox'] = [x0, y0, x1 - x0, y1 - y0]
+        print('DONE (t={:0.2f}s)'.format(time.time() - tic))
+
+        res.dataset['annotations'] = anns
+        res.createIndex()
+        return res
+
+    def pickle_to_mask(self, directory):
+        """
+        Search in directory for segmentation pickle and return if available
+        :return: binary mask (numpy 2D array)
+        """
+        regex = re.compile('(.*whole_person.mask.pickle$)')
+        for _, _, files in os.walk(directory):
+            for file in files:
+                if regex.match(file):
+                    with open(os.path.join(directory, file), "rb") as pickle_file:
+                        rle = pickle.load(pickle_file)
+                        return rle
+        return None
+
+    def annToRLE(self, ann):
+        """
+        Convert annotation which can be polygons, uncompressed RLE to RLE.
+        :return: binary mask (numpy 2D array)
+        """
+        idx = ann["image_id"]
+
+        # remove .jpeg file type
+        file_name = self.imgs[idx]['file_name'][:-5]
+        # create directory pattern
+        directory = re.sub("_", "_(0", file_name) + ")"
+        # check if segmentation available
+        directory = os.path.join(MASK_JUMP_DIR, directory)
+
+        # print("checking if directory : {} exists".format(directory))
+        rle = None
+        if os.path.isdir(directory):
+            rle = self.pickle_to_mask(directory)
+
+        if rle is None:
+            # image = self.jump.imgs[image_id]
+            # width = image["width"]
+            # height = image["height"]
+            # Annotations for pictures might be switched in some cases
+            # general all pictures in Jump dataset are of shape (WxHxC) 1920 x 1080 x 3
+            # image: [height, width, 3]
+            m = np.zeros((1080, 1920, 3), dtype=np.uint8)
+            m = np.asfortranarray(m)
+            rle = maskUtils.encode(m)
+        return rle
+
+    def annToMask(self, ann):
+        """
+        Convert annotation which can be polygons, uncompressed RLE, or RLE to binary mask.
+        :return: binary mask (numpy 2D array)
+        """
+        idx = ann["image_id"]
+
+        # remove .jpeg file type
+        file_name = self.imgs[idx]['file_name'][:-5]
+        # create directory pattern
+        directory = re.sub("_", "_(0", file_name) + ")"
+        # check if segmentation available
+        directory = os.path.join(MASK_JUMP_DIR, directory)
+
+        # print("checking if directory : {} exists".format(directory))
+        m = None
+        if os.path.isdir(directory):
+            rle = self.pickle_to_mask(directory)
+            m = maskUtils.decode(rle)
+            m = np.asarray(m).astype(np.bool)
+
+        if m is None:
+            # image = self.jump.imgs[image_id]
+            # width = image["width"]
+            # height = image["height"]
+            # Annotations for pictures might be switched in some cases
+            # general all pictures in Jump dataset are of shape (WxHxC) 1920 x 1080 x 3
+            # image: [height, width, 3]
+            m = np.zeros((1080, 1920, 3)).astype(bool)
+        return m
 
 
 ############################################################
@@ -706,6 +850,139 @@ class JumpDataset(dataset.Dataset):
 
 
 ############################################################
+#  Evaluation
+############################################################
+
+def build_jump_results(dataset, image_ids, result):
+    # Arrange resutls to match COCO specs in http://cocodataset.org/#format
+    # If no results, return an empty list
+
+    if result["bboxes"] is None:
+        return []
+
+    rois = result["bboxes"]
+    class_ids = result["class_ids"]
+    scores = result["scores"]
+    masks = None
+    keypoints = None
+
+    if "masks" in result:
+        masks = result["masks"].astype(np.uint8)
+
+    if "keypoints" in result:
+        keypoints = result["keypoints"]
+
+    results = []
+    for image_id in image_ids:
+        # Loop through detections
+        for i in range(rois.shape[0]):
+            class_id = class_ids[i]
+            score = scores[i]
+            bbox = np.around(rois[i], 1)
+
+            result = {
+                "image_id": image_id,
+                "category_id": dataset.get_source_class_id(class_id, "jump"),
+                "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
+                "score": score
+            }
+
+            if masks is not None:
+                mask = masks[:, :, i]
+                result["segmentation"] = maskUtils.encode(np.asfortranarray(mask))
+            if keypoints is not None:
+                keypoint = keypoints[i, :, :].flatten().tolist()
+                result["keypoints"] = keypoint
+
+            results.append(result)
+    return results
+
+
+def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=None, training_heads=None):
+    """Runs a jump evaluation.
+
+        model: MaskRCNN model for inference
+        dataset: A Dataset object with valiadtion data
+        jump: JUMP class to load annotations and result
+        eval_type: 'segm', 'bbox' (official COCO evaluation) or 'keypoints' for jump evaluation
+        limit: if not 0, it's the number of images to use for evaluation
+    """
+
+    # Pick image_ids from the dataset
+    image_ids = image_ids or dataset.image_ids
+
+    # Limit to a subset
+    if limit:
+        image_ids = image_ids[:limit]
+
+    # Get corresponding COCO image IDs.
+    jump_image_ids = [dataset.image_info[id]["id"] for id in image_ids]
+
+    t_prediction = 0
+    t_start = time.time()
+
+    results = []
+    total_image_count = len(image_ids)
+    next_prgress = 0
+    for i, image_id in enumerate(image_ids):
+        # print progress
+        progress = int(100 * (i / total_image_count))
+        if next_prgress != progress:
+            next_prgress = progress
+            print('\r[{0}{1}] {2}%'.format('#' * progress, " " * (100 - progress), progress), end=' ', flush=True)
+
+        # Load image
+        image = dataset.load_image(image_id)
+
+        # Run detection
+        t = time.time()
+        if training_heads == "keypoint":
+            r = model.detect_keypoint([image], verbose=0)[0]
+        elif training_heads == "mask":
+            r = model.detect_mask([image], verbose=0)[0]
+        else:
+            r = model.detect([image], verbose=0)[0]
+
+        t_prediction += (time.time() - t)
+
+        # Convert results to COCO format
+        # Cast masks to uint8 because COCO tools errors out on bool
+        image_results = build_jump_results(dataset, jump_image_ids[i:i + 1], r)
+        results.extend(image_results)
+
+    if training_heads == "mask":
+        # Load results. This modifies results with additional attributes.
+        coco_results = jump.loadRes(results)
+
+        # Evaluate
+        from pycocotools.cocoeval import COCOeval
+        cocoEval = COCOeval(jump, coco_results, eval_type)
+        cocoEval.params.imgIds = jump_image_ids
+        cocoEval.evaluate()
+        cocoEval.accumulate()
+        cocoEval.summarize()
+
+    if training_heads == "keypoint":
+        import samples.jump.pose_metrics
+        from samples.jump.bisp_joint_order import JumpJointOrder
+
+        for result in results:
+            prediction = samples.jump.pose_metrics.np.array(result["keypoints"]).reshape((1, 20, 3))
+            annotation = samples.jump.pose_metrics.np.array([i for i in dataset.image_info if i['id'] == result['image_id']][0]["annotations"][0][
+                                      "keypoints"]).reshape((1, 20, 3))
+
+            norm_distance = samples.jump.pose_metrics.pck_normalized_distances_fast(prediction, annotation,
+                                                                                    ref_length_indices=(
+                                                           JumpJointOrder.l_shoulder, JumpJointOrder.r_hip))
+            pck_thresholds, pck_scores = samples.jump.pose_metrics.pck_scores_from_normalized_distances(norm_distance)
+            score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.9)
+            print(score)
+
+    print("Prediction time: {}. Average {}/image".format(t_prediction, t_prediction / len(image_ids)))
+    print("Total time: ", time.time() - t_start)
+
+
+############################################################
 #  Training
 ############################################################
 
@@ -880,7 +1157,36 @@ if __name__ == '__main__':
             last_layers = layers
 
     elif args.command == "evaluate":
-        print("'evaluate' is not supported yet ...")
+        class InferenceConfig(JumpConfig):
+
+            # Set batch size to 1 since we'll be running inference on
+            # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
+            GPU_COUNT = 1
+            IMAGES_PER_GPU = 1
+            DETECTION_MIN_CONFIDENCE = 0
+
+
+        config = InferenceConfig()
+        # Training Heads
+        config.TRAINING_HEADS = args.training_heads
+        config.display()
+
+        # Validation dataset
+        dataset_val = JumpDataset()
+        jump = dataset_val.load_jump(args.dataset, "val", return_jump=True)
+        dataset_val.prepare()
+        print("Running Jump evaluation on {} images.".format(args.limit if int(args.limit) != 0 else "all"))
+
+        # Create model in inference mode
+        model = modellib.MaskRCNN(mode="inference", config=config, model_dir=args.logs)
+
+        # Load weights
+        print("Loading weights from ", model_path)
+        load_weights(model, model_path, by_name=True, include_optimizer=False)
+
+        print("Start evaluation..")
+        evaluate_jump(model, dataset_val, jump, args.eval_type, limit=int(args.limit),
+                      training_heads=args.training_heads)
 
     else:
         print("'{}' is not recognized. "
