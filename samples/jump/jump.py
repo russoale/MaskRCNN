@@ -479,6 +479,30 @@ class JumpDataset(dataset.Dataset):
     def keypoint_names(self):
         return self._keypoint_names
 
+    def load_keypoints_mask(self, image_id):
+        """Load person keypoints for the given image.
+
+        Returns:
+        key_points: num_keypoints coordinates and visibility (x,y,v)  [num_person,num_keypoints,3] of num_person
+        masks: A bool array of shape [height, width, instance count] with
+            one mask per instance.
+        class_ids: a 1D array of class IDs of the instance masks, here is always equal to [num_person, 1]
+        """
+        # If not a COCO image, delegate to parent class.
+        image_info = self.image_info[image_id]
+        if image_info["source"] != "jump":
+            keypoints, _ = super(JumpDataset, self).load_keypoints(image_id)
+            return keypoints, super(JumpDataset, self).load_mask(image_id)
+
+        masks, _, _ = self.load_mask(image_id)
+        keypoints, class_ids = self.load_keypoints(image_id)
+
+        if class_ids:
+            return keypoints, masks, class_ids
+        else:
+            # Call super class to return an empty mask
+            return super(JumpDataset, self).load_keypoints_mask(image_id)
+
     def load_keypoints(self, image_id):
         """Load person keypoints for the given image.
 
@@ -951,16 +975,23 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
         results.extend(image_results)
 
     if training_heads == "mask":
-        # Load results. This modifies results with additional attributes.
-        coco_results = jump.loadRes(results)
 
-        # Evaluate
-        from pycocotools.cocoeval import COCOeval
-        cocoEval = COCOeval(jump, coco_results, eval_type)
-        cocoEval.params.imgIds = jump_image_ids
-        cocoEval.evaluate()
-        cocoEval.accumulate()
-        cocoEval.summarize()
+        detected_masks = []
+        for detection in results:
+            if detection['segmentation']['counts'] != bytes(b'PPYo1'):
+                detected_masks.extend(detection)
+
+        if detected_masks:
+            # Load results. This modifies results with additional attributes.
+            jump_results = jump.loadRes(detected_masks)
+
+            # Evaluate
+            from pycocotools.cocoeval import COCOeval
+            cocoEval = COCOeval(jump, jump_results, eval_type)
+            cocoEval.params.imgIds = jump_image_ids
+            cocoEval.evaluate()
+            cocoEval.accumulate()
+            cocoEval.summarize()
 
     if training_heads == "keypoint":
         import samples.jump.pose_metrics
@@ -978,6 +1009,8 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
             score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.9)
             print(score)
 
+    print("")
+    print("----------------------------------")
     print("Prediction time: {}. Average {}/image".format(t_prediction, t_prediction / len(image_ids)))
     print("Total time: ", time.time() - t_start)
 
