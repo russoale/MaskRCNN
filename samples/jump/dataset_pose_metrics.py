@@ -5,11 +5,11 @@ Created on 25 Jan 2019, 15:53
 @author: einfalmo
 """
 
-from eval_utils.pose_metrics import pck_normalized_distances_fast
-from data_handling.bisp_joint_order import SwimJointOrder, JumpJointOrder
-
 
 # PCK reference joints
+from samples.jump.bisp_joint_order import JumpJointOrder, SwimJointOrder
+from samples.jump.pose_metrics import pck_normalized_distances_fast
+
 _jump_reference_joints = [JumpJointOrder.l_shoulder, JumpJointOrder.r_hip]
 _swim_reference_joints = [SwimJointOrder.l_shoulder, SwimJointOrder.r_hip]
 

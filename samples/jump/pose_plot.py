@@ -11,7 +11,8 @@ Collection of plot and imshow tools for human poses.
 import cv2
 import numpy as np
 import colorsys
-from data_handling import bisp_joint_order
+
+from samples.jump import bisp_joint_order
 
 
 def _hsv_colors(num_colors):

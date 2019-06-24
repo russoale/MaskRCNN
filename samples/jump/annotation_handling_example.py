@@ -6,13 +6,11 @@ Created on 15 Jun 2018, 10:24
 """
 
 import os
-import numpy as np
 import cv2
 
-from pose_plot import draw_jump_pose
-import annotation_io
-from video_utils.simple_video_reader import  SimpleVideoReader
-
+from samples.jump import annotation_io
+from samples.jump.pose_plot import draw_jump_pose
+from samples.jump.simple_video_reader import SimpleVideoReader
 
 if __name__ == "__main__":
 

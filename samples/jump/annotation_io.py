@@ -9,7 +9,7 @@ Created on Mon Oct 24 15:12:33 2016
 import os
 import numpy as np
 import csv
-from data_handling.bisp_joint_order import SwimJointOrder, JumpJointOrder
+from samples.jump.bisp_joint_order import JumpJointOrder, SwimJointOrder
 
 # CSV header for annotation I/O
 _swimming_annotation_header = ["athlete", "event", "frame_num", "cam_num"] + [joint_name + suffix for joint_name in SwimJointOrder.names() for suffix in ["_x", "_y", "_vis"]]

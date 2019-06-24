@@ -974,6 +974,7 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
         image_results = build_jump_results(dataset, jump_image_ids[i:i + 1], r)
         results.extend(image_results)
 
+    print("")
     if training_heads == "mask":
 
         detected_masks = []
@@ -997,6 +998,7 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
         import samples.jump.pose_metrics
         from samples.jump.bisp_joint_order import JumpJointOrder
 
+        scores = []
         for result in results:
             prediction = samples.jump.pose_metrics.np.array(result["keypoints"]).reshape((1, 20, 3))
             annotation = samples.jump.pose_metrics.np.array([i for i in dataset.image_info if i['id'] == result['image_id']][0]["annotations"][0][
@@ -1006,10 +1008,12 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
                                                                                     ref_length_indices=(
                                                            JumpJointOrder.l_shoulder, JumpJointOrder.r_hip))
             pck_thresholds, pck_scores = samples.jump.pose_metrics.pck_scores_from_normalized_distances(norm_distance)
-            score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.9)
-            print(score)
+            # alpha 0,1 used in paper
+            score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.1)
+            scores.append(score)
 
-    print("")
+        print("Avg. PCK {}".format(np.average(scores)))
+
     print("----------------------------------")
     print("Prediction time: {}. Average {}/image".format(t_prediction, t_prediction / len(image_ids)))
     print("Total time: ", time.time() - t_start)
@@ -1204,10 +1208,16 @@ if __name__ == '__main__':
         config.TRAINING_HEADS = args.training_heads
         config.display()
 
-        # Validation dataset
-        dataset_val = JumpDataset()
-        jump = dataset_val.load_jump(args.dataset, "val", return_jump=True)
-        dataset_val.prepare()
+        # Test dataset
+        dataset_test = JumpDataset()
+        jump = dataset_test.load_jump(args.dataset, "test", return_jump=True)
+        dataset_test.prepare()
+
+        print("Test Keypoints Image Count: {}".format(len(dataset_test.image_ids)))
+        print("Test Keypoints Class Count: {}".format(dataset_test.num_classes))
+        for i, info in enumerate(dataset_test.class_info):
+            print("{:3}. {:50}".format(i, info['name']))
+
         print("Running Jump evaluation on {} images.".format(args.limit if int(args.limit) != 0 else "all"))
 
         # Create model in inference mode
@@ -1218,7 +1228,7 @@ if __name__ == '__main__':
         load_weights(model, model_path, by_name=True, include_optimizer=False)
 
         print("Start evaluation..")
-        evaluate_jump(model, dataset_val, jump, args.eval_type, limit=int(args.limit),
+        evaluate_jump(model, dataset_test, jump, args.eval_type, limit=int(args.limit),
                       training_heads=args.training_heads)
 
     else:
