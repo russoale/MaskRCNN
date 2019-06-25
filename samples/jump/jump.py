@@ -998,21 +998,27 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
         import samples.jump.pose_metrics
         from samples.jump.bisp_joint_order import JumpJointOrder
 
-        scores = []
+        predictions = []
+        annotations = []
         for result in results:
-            prediction = samples.jump.pose_metrics.np.array(result["keypoints"]).reshape((1, 20, 3))
-            annotation = samples.jump.pose_metrics.np.array([i for i in dataset.image_info if i['id'] == result['image_id']][0]["annotations"][0][
-                                      "keypoints"]).reshape((1, 20, 3))
+            predictions.append(samples.jump.pose_metrics.np.array(result["keypoints"]).reshape((1, 20, 3)))
+            annotations.append(samples.jump.pose_metrics.np.array(
+                [i for i in dataset.image_info if i['id'] == result['image_id']][0]["annotations"][0][
+                    "keypoints"]).reshape((1, 20, 3)))
 
-            norm_distance = samples.jump.pose_metrics.pck_normalized_distances_fast(prediction, annotation,
-                                                                                    ref_length_indices=(
-                                                           JumpJointOrder.l_shoulder, JumpJointOrder.r_hip))
-            pck_thresholds, pck_scores = samples.jump.pose_metrics.pck_scores_from_normalized_distances(norm_distance)
-            # alpha 0,1 used in paper
-            score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.1)
-            scores.append(score)
+        norm_distance = samples.jump.pose_metrics.pck_normalized_distances_fast(np.asarray(predictions).squeeze(),
+                                                                                np.asarray(annotations).squeeze(),
+                                                                                ref_length_indices=(
+                                                                                    JumpJointOrder.l_shoulder,
+                                                                                    JumpJointOrder.r_hip))
+        # filter norm_distance for invalid flags
+        norm_distance = np.where(norm_distance > 0, norm_distance, -1)
 
-        print("Avg. PCK {}".format(np.average(scores)))
+        # plot
+        pck_thresholds, pck_scores = samples.jump.pose_metrics.pck_scores_from_normalized_distances(norm_distance)
+
+        score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.2)
+        print("Avg. PCK {}".format(score))
 
     print("----------------------------------")
     print("Prediction time: {}. Average {}/image".format(t_prediction, t_prediction / len(image_ids)))
