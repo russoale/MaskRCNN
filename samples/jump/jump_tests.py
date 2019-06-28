@@ -97,14 +97,20 @@ class JumpTests(TestCase):
         ], random_order=True)
 
         image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
-            dg.load_image_gt(image_id, augmentation=augmentation, use_mini_mask=True)
+            dg.load_image_gt(image_id, augmentation=None, use_mini_mask=True)
 
-        if gt_masks.max() > 0:
-            gt_masks = utils.expand_mask(gt_boxes, gt_masks, image.shape)
-            visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids,
-                                        dataset.class_names, title="Original")
-        else:
-            visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names,
+        # if gt_masks.max() > 0:
+        #     gt_masks = utils.expand_mask(gt_boxes, gt_masks, image.shape)
+        #     visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids,
+        #                                 dataset.class_names, title="Original")
+        # else:
+        from samples.jump.bisp_joint_order import JumpJointOrder
+        jump_joint = JumpJointOrder()
+        skeleton = np.array(jump_joint.bodypart_indices(), dtype=np.int32)
+        for connection in skeleton:
+            connection[0], connection[1] = connection + 1
+        print(skeleton)
+        visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names, skeleton=skeleton,
                                         title="Original", dataset=dataset)
         pass
 

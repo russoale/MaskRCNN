@@ -187,7 +187,7 @@ def display_keypoints(image, boxes, keypoints, class_ids, class_names,
                 ax.text(Joint[0], Joint[1], keypoint_label[idx], color="w", size=8, backgroundcolor="none")
 
         # Skeleton: 19*2
-        if (skeleton != None):
+        if skeleton is not None:
             for connection in skeleton:
                 joint_start, joint_end = connection - 1  # connection stats from 1 to 17
 
@@ -195,10 +195,8 @@ def display_keypoints(image, boxes, keypoints, class_ids, class_names,
                 Joint_end = keypoints[i][joint_end]
                 # both are Annotated
                 # Joint:(x,y,v)
-                if ((Joint_start[2] != 0) & (Joint_end[2] != 0)):
-                    # print(color)
-
-                    cv2.line(skeleton_image, tuple(Joint_start[:2]), tuple(Joint_end[:2]), [x * 255 for x in color])
+                if (Joint_start[2] != 0) & (Joint_end[2] != 0):
+                    cv2.line(skeleton_image, tuple(Joint_start[:2]), tuple(Joint_end[:2]), [x * 255 for x in color], thickness=3)
     ax.imshow(skeleton_image.astype(np.uint8))
     plt.show()
 

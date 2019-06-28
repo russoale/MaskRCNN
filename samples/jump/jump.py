@@ -352,6 +352,10 @@ class JUMP:
         Convert annotation which can be polygons, uncompressed RLE to RLE.
         :return: binary mask (numpy 2D array)
         """
+        # detections already have rle compressed mask in annotations
+        if 'segmentation' in ann:
+            return ann['segmentation']
+
         idx = ann["image_id"]
 
         # remove .jpeg file type
@@ -360,54 +364,11 @@ class JUMP:
         directory = re.sub("_", "_(0", file_name) + ")"
         # check if segmentation available
         directory = os.path.join(MASK_JUMP_DIR, directory)
+        if not os.path.isdir(directory):
+            raise Exception("directory does not exist for image: {}".format(idx))
 
-        # print("checking if directory : {} exists".format(directory))
-        rle = None
-        if os.path.isdir(directory):
-            rle = self.pickle_to_mask(directory)
-
-        if rle is None:
-            # image = self.jump.imgs[image_id]
-            # width = image["width"]
-            # height = image["height"]
-            # Annotations for pictures might be switched in some cases
-            # general all pictures in Jump dataset are of shape (WxHxC) 1920 x 1080 x 3
-            # image: [height, width, 3]
-            m = np.zeros((1080, 1920, 3), dtype=np.uint8)
-            m = np.asfortranarray(m)
-            rle = maskUtils.encode(m)
-        return rle
-
-    def annToMask(self, ann):
-        """
-        Convert annotation which can be polygons, uncompressed RLE, or RLE to binary mask.
-        :return: binary mask (numpy 2D array)
-        """
-        idx = ann["image_id"]
-
-        # remove .jpeg file type
-        file_name = self.imgs[idx]['file_name'][:-5]
-        # create directory pattern
-        directory = re.sub("_", "_(0", file_name) + ")"
-        # check if segmentation available
-        directory = os.path.join(MASK_JUMP_DIR, directory)
-
-        # print("checking if directory : {} exists".format(directory))
-        m = None
-        if os.path.isdir(directory):
-            rle = self.pickle_to_mask(directory)
-            m = maskUtils.decode(rle)
-            m = np.asarray(m).astype(np.bool)
-
-        if m is None:
-            # image = self.jump.imgs[image_id]
-            # width = image["width"]
-            # height = image["height"]
-            # Annotations for pictures might be switched in some cases
-            # general all pictures in Jump dataset are of shape (WxHxC) 1920 x 1080 x 3
-            # image: [height, width, 3]
-            m = np.zeros((1080, 1920, 3)).astype(bool)
-        return m
+        rles = self.pickle_to_mask(directory)
+        return maskUtils.merge(rles)
 
 
 ############################################################
@@ -459,12 +420,15 @@ class JumpDataset(dataset.Dataset):
 
         # Add images
         for i in image_ids:
+            anns = jump.loadAnns(jump.getAnnIds(imgIds=[i]))
+            # currently no area annotation is available therefore extend based on bbox
+            anns[0]['area'] = anns[0]['bbox'][2] * anns[0]['bbox'][3]
             self.add_image(
                 "jump", image_id=i,
                 path=os.path.join(image_dir, jump.imgs[i]['file_name']),
                 width=jump.imgs[i]["width"],
                 height=jump.imgs[i]["height"],
-                annotations=jump.loadAnns(jump.getAnnIds(imgIds=[i])))
+                annotations=anns)
 
         print("Skeleton:", np.shape(self._skeleton))
         print("Keypoint names:", np.shape(self._keypoint_names))
@@ -654,37 +618,6 @@ class JumpDataset(dataset.Dataset):
         else:
             # Call super class to return an empty mask
             return super(JumpDataset, self).load_mask(image_id)
-
-    def ann_to_rle(self, ann, height, width):
-        """
-        Convert annotation which can be polygons, uncompressed RLE to RLE.
-        :return: binary mask (numpy 2D array)
-        """
-        if 'segmentation' in ann:
-            segm = ann['segmentation']
-            if isinstance(segm, list):
-                # polygon -- a single object might consist of multiple parts
-                # we merge all parts into one mask rle code
-                rles = maskUtils.frPyObjects(segm, height, width)
-                rle = maskUtils.merge(rles)
-            elif isinstance(segm['counts'], list):
-                # uncompressed RLE
-                rle = maskUtils.frPyObjects(segm, height, width)
-            else:
-                # rle
-                rle = ann['segmentation']
-            return rle
-        else:
-            return None
-
-    def ann_to_mask(self, ann, height, width):
-        """
-        Convert annotation which can be polygons, uncompressed RLE, or RLE to binary mask.
-        :return: binary mask (numpy 2D array)
-        """
-        rle = self.ann_to_rle(ann, height, width)
-        m = None if rle is None else maskUtils.decode(rle)
-        return m
 
     def pickle_to_mask(self, directory):
         """
@@ -935,8 +868,17 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
     # Pick image_ids from the dataset
     image_ids = image_ids or dataset.image_ids
 
+    if eval_type == 'segm':
+        # filter annotations for existing masks
+        valid_ids = []
+        for id in image_ids:
+            _, _, mask_train = dataset.load_mask(id)
+            if mask_train == 1:
+                valid_ids.append(id)
+        image_ids = valid_ids
+
     # Limit to a subset
-    if limit:
+    if limit and limit < len(image_ids):
         image_ids = image_ids[:limit]
 
     # Get corresponding COCO image IDs.
@@ -977,18 +919,14 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
     print("")
     if training_heads == "mask":
 
-        detected_masks = []
-        for detection in results:
-            if detection['segmentation']['counts'] != bytes(b'PPYo1'):
-                detected_masks.extend(detection)
-
-        if detected_masks:
+        results = [i for i in results if i['segmentation']['counts'] != bytes(b'PPYo1')]
+        if results:
             # Load results. This modifies results with additional attributes.
-            jump_results = jump.loadRes(detected_masks)
+            jump_results = jump.loadRes(results)
 
             # Evaluate
             from pycocotools.cocoeval import COCOeval
-            cocoEval = COCOeval(jump, jump_results, eval_type)
+            cocoEval = COCOeval(cocoGt=jump, cocoDt=jump_results, iouType=eval_type)
             cocoEval.params.imgIds = jump_image_ids
             cocoEval.evaluate()
             cocoEval.accumulate()
@@ -1016,6 +954,13 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
 
         # plot
         pck_thresholds, pck_scores = samples.jump.pose_metrics.pck_scores_from_normalized_distances(norm_distance)
+
+        import matplotlib.pyplot as plt
+        plt.plot(pck_thresholds, pck_scores)
+        plt.xlabel('PCK thresholds')
+        plt.ylabel('PCK scores')
+        plt.axis([0, pck_thresholds.max(), 0, pck_scores.max()])
+        plt.show()
 
         score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.2)
         print("Avg. PCK {}".format(score))
