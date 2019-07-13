@@ -62,3 +62,6 @@ ENV/
 samples/coco/annotations
 samples/coco/val2017
 samples/coco/train2017
+
+# jump
+samples/jump/jump20190625T1622

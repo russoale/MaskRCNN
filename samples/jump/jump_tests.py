@@ -1,23 +1,35 @@
 ############################################################
 #  Test
 ############################################################
-import json
-import pickle
+import time
 from unittest import TestCase
 
-import copy
+import cv2
+import math
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 import random
-import re
-from PIL import Image, ImageDraw
 from imgaug import augmenters as iaa
-from pycocotools import mask as maskUtils
-from skimage import measure
 
-from mrcnn import augmenter, utils
+import mrcnn.model as modellib
+from mrcnn import augmenter
 from mrcnn import data_generator, visualize
+from mrcnn.load_weights import load_weights
 from samples.jump import jump
+from samples.jump.bisp_joint_order import JumpJointOrder
+
+DATA_DIR = os.path.abspath("/data/hdd")
+
+# Directory to save logs and trained model
+MODEL_DIR = os.path.join(DATA_DIR, "russales", "test_logs")
+
+# Local path to trained weights file
+JUMP_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "jump20190625T1622", "mask_rcnn_jump_0160.h5")
+
+# Example Video Path
+VIDEO_PATH = os.path.join(DATA_DIR, "russales", "JumpDataset", "Videos", "Dreisprung", "drei 180617 Garritsen 1.mp4")
+VIDEO_PATH_OUT = os.path.join(DATA_DIR, "russales", "drei_180617_Garritsen_1_out_160.avi")
 
 
 class JumpTests(TestCase):
@@ -104,141 +116,216 @@ class JumpTests(TestCase):
         #     visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids,
         #                                 dataset.class_names, title="Original")
         # else:
-        from samples.jump.bisp_joint_order import JumpJointOrder
+
         jump_joint = JumpJointOrder()
         skeleton = np.array(jump_joint.bodypart_indices(), dtype=np.int32)
         for connection in skeleton:
             connection[0], connection[1] = connection + 1
         print(skeleton)
         visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names, skeleton=skeleton,
-                                        title="Original", dataset=dataset)
+                                    title="Original", dataset=dataset)
         pass
 
-    def test_mask_into_annotation_json(self):
-        DATA_DIR = os.path.abspath("/data/hdd/")
-        JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "mscoco_format")
-        MASK_JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "Segmentation_masks",
-                                     "annotierte_daten_springer")
+    def test_predict_mask(self):
+        # load image and ground truth data
+        config = self.load_test_config(None)
+        dataset = self.load_dataset("train")
 
-        json_file = json.load(open("{}/annotations/keypoints_{}.json".format(JUMP_DIR, "val"), 'r'))
-        copy_file = copy.deepcopy(json_file)
+        model = modellib.MaskRCNN(mode="inference", config=config, model_dir=MODEL_DIR)
 
-        for image in json_file['images']:
-            image_id = image['id']
-            file_name = image['file_name'][:-5]
-            directory = re.sub("_", "_(0", file_name) + ")"
-            directory = os.path.join(MASK_JUMP_DIR, directory)
+        # Load weights
+        print("Loading weights ", JUMP_MODEL_PATH)
+        load_weights(model, JUMP_MODEL_PATH, by_name=True, include_optimizer=False)
 
-            if os.path.isdir(directory):
-                regex = re.compile('(.*whole_person.mask.pickle$)')
-                for _, _, files in os.walk(directory):
-                    for file in files:
-                        if regex.match(file):
-                            with open(os.path.join(directory, file), "rb") as pickle_file:
-                                rle = pickle.load(pickle_file)
-                                m = maskUtils.decode(rle)
-                                fortran_ground_truth_binary_mask = np.asfortranarray(m)
-                                encoded_ground_truth = maskUtils.encode(fortran_ground_truth_binary_mask)
-                                ground_truth_area = maskUtils.area(encoded_ground_truth)
+        dg = data_generator.DataGenerator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
 
-                                m = np.asarray(m)[:, :, :1]
-                                m = m.reshape(m.shape[0], (m.shape[1] * m.shape[2]))
-                                contours = measure.find_contours(m.astype(np.int8), 0.5)
+        image_ids = [id for id, img in dataset.jump.imgs.items() if "091217 Nogueira 6" in img['file_name']]
 
-                                for item in copy_file["annotations"]:
-                                    if item["image_id"] == image_id:
-                                        ann = item
-                                        break
-                                    else:
-                                        continue
+        # has_ann = []
+        # for id in image_ids:
+        #     _, _, mask_train = dataset.load_mask(id)
+        #     has_ann.append(mask_train)
 
-                                ann["segmentation"] = []
-                                for contour in contours:
-                                    contour = np.flip(contour, axis=1)
-                                    segmentation = contour.ravel().tolist()
+        # image_id = random.choice(dataset.image_ids)
+        # image_ids = []
+        # random.shuffle(dataset.image_ids)
+        # for id in dataset.image_ids:
+        #     _, _, mask_train = dataset.load_mask(id)
+        #     if mask_train == 1:
+        #         image_ids.append(id)
+        #     if len(image_ids) == 5:
+        #         break
 
-                                ann["segmentation"].append(segmentation)
-                                ann["area"] = ground_truth_area.tolist()
+        rows = math.ceil(len(image_ids) / 5)
+        height = (len(image_ids) / 5) * 16
+        f = plt.figure(figsize=(80, height))
+        for idx, image_id in enumerate(image_ids):
+            info = [i for i in dataset.image_info if i["id"] == image_id][0]
+            _, _, mask_train = dataset.load_mask(dataset.image_info.index(info))
+            print("image ID: {}.{} ({}) {}".format(info["source"], info["id"], image_id,
+                                                   dataset.image_reference(image_id)))
 
-        with open("/data/hdd/russales/annotations/keypoints_{}.json".format("val"), 'w') as fp:
-            json.dump(copy_file, fp)
+            image_id = dataset.image_info.index([i for i in dataset.image_info if i["id"] == image_id][0])
+            image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
+                dg.load_image_gt(image_id, augmentation=None, use_mini_mask=False)
 
-    def test_polygon_to_image(self):
+            # create skeleton to display joints
+            from samples.jump.bisp_joint_order import JumpJointOrder
+            jump_joint = JumpJointOrder()
+            skeleton = np.array(jump_joint.bodypart_indices(), dtype=np.int32)
+            # print(skeleton)
+            # only jump dataset related
+            for connection in skeleton:
+                connection[0], connection[1] = connection + 1
 
-        DATA_DIR = os.path.abspath("/data/hdd/")
-        JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "mscoco_format")
-        MASK_JUMP_DIR = os.path.join(DATA_DIR, "russales", "JumpDataset", "Segmentation_masks",
-                                     "annotierte_daten_springer")
+            results = model.detect([image], verbose=1)
 
-        json_file = json.load(open("{}/annotations/keypoints_{}.json".format(JUMP_DIR, "train"), 'r'))
+            # Display results
+            r = results[0]
 
-        copy_file = copy.deepcopy(json_file)
+            bboxes_res = r['bboxes']
+            class_ids_res = r['class_ids']
+            scores_res = r['scores']
+            keypoints_res = r['keypoints']
+            mask_res = r['masks']
+            print("Mask detected: ", mask_res.max())
+            ax = f.add_subplot(rows, 5, idx + 1)
+            visualize.display_instances(image, bboxes_res, mask_res, class_ids_res, dataset.class_names, ax=ax,
+                                        title="Mask annotation available: {}".format(mask_train))
 
-        for image in json_file['images']:
-            image_id = image['id']
-            file_name = image['file_name'][:-5]
-            directory = re.sub("_", "_(0", file_name) + ")"
-            directory = os.path.join(MASK_JUMP_DIR, directory)
+        # ax0 = f.add_subplot(221)
+        # ax1 = f.add_subplot(222)
+        # ax2 = f.add_subplot(223)
+        # ax3 = f.add_subplot(224)
+        # visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names, skeleton=skeleton,
+        #                             ax=ax0, title="Original", dataset=dataset)
+        # visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids, dataset.class_names, ax=ax1,
+        #                             title="Original")
+        # visualize.display_keypoints(image, bboxes_res, keypoints_res, class_ids_res, dataset.class_names,
+        #                             skeleton=skeleton, scores=scores_res,
+        #                             title="Predictions", ax=ax2, dataset=dataset)
+        # visualize.display_instances(image, bboxes_res, mask_res, class_ids_res, dataset.class_names,
+        #                             title="Predictions", ax=ax3)
 
-            if os.path.isdir(directory):
-                regex = re.compile('(.*whole_person.mask.pickle$)')
-                for _, _, files in os.walk(directory):
-                    for file in files:
-                        if regex.match(file):
-                            with open(os.path.join(directory, file), "rb") as pickle_file:
-                                rle = pickle.load(pickle_file)
-                                m = maskUtils.decode(rle)
-                                fortran_ground_truth_binary_mask = np.asfortranarray(m)
-                                encoded_ground_truth = maskUtils.encode(fortran_ground_truth_binary_mask)
-                                ground_truth_area = maskUtils.area(encoded_ground_truth)
+        # plt.show()
+        # plt.savefig("jump20190625T1622/160/val/{}-{}.png".format(info["source"], info["id"]))
+        # plt.savefig("jump20190625T1622/25/val/multiple.png", bbox_inches='tight')
+        plt.savefig("jump20190625T1622/vid_sequence_Nogueira_train_25.png", bbox_inches='tight')
 
-                                m = np.asarray(m)[:, :, :1]
-                                m = m.reshape(m.shape[0], (m.shape[1] * m.shape[2]))
-                                contours = measure.find_contours(m.astype(np.int8), 0.5)
+    def test_video(self):
+        # load image and ground truth data
+        config = self.load_test_config(None)
+        model = modellib.MaskRCNN(mode="inference", config=config, model_dir=MODEL_DIR)
+        # load_weights(model, "/Users/alessandrorusso/Downloads/mask_rcnn_jump_0160.h5", by_name=True, include_optimizer=False)
+        load_weights(model, JUMP_MODEL_PATH, by_name=True, include_optimizer=False)
 
-                                ann = next(item for item in copy_file["annotations"] if item["id"] == image_id)
-                                ann["segmentation"] = []
-                                for contour in contours:
-                                    contour = np.flip(contour, axis=1)
-                                    img = Image.new('L', (m.shape[0], m.shape[1]), 0)
-                                    ImageDraw.Draw(img).polygon(contour, outline=1, fill=1)
-                                    mask = np.array(img)
+        class_names = ['BG', 'person']
+        jump_joint = JumpJointOrder()
+        skeleton = np.array(jump_joint.bodypart_indices(), dtype=np.int32)
 
-    def test_polygon(self):
-        import json
-        import numpy as np
-        from pycocotools import mask
-        from skimage import measure
+        def _cv2_display_keypoint(image, boxes, keypoints, masks, class_ids, scores, class_names,
+                                  skeleton=skeleton):
+            # Number of persons
+            N = boxes.shape[0]
+            if not N:
+                print("\n*** No persons to display *** \n")
+            else:
+                assert N == keypoints.shape[0] and N == class_ids.shape[0] and N == scores.shape[0], \
+                    "shape must match: boxes,keypoints,class_ids, scores"
+            colors = visualize.random_colors(N)
+            for i in range(N):
+                color = colors[i]
+                # Bounding box
+                if not np.any(boxes[i]):
+                    # Skip this instance. Has no bbox. Likely lost in image cropping.
+                    continue
+                y1, x1, y2, x2 = boxes[i]
+                cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness=2)
+                for Joint in keypoints[i]:
+                    if Joint[2] != 0:
+                        cv2.circle(image, (Joint[0], Joint[1]), 2, color, -1)
 
-        ground_truth_binary_mask = np.array([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                                             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                                             [0, 0, 0, 0, 0, 1, 1, 1, 0, 0],
-                                             [0, 0, 0, 0, 0, 1, 1, 1, 0, 0],
-                                             [0, 0, 0, 0, 0, 1, 1, 1, 0, 0],
-                                             [0, 0, 0, 0, 0, 1, 1, 1, 0, 0],
-                                             [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                                             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                                             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], dtype=np.uint8)
+                # draw skeleton connection
+                limb_colors = [[0, 0, 255], [0, 170, 255], [0, 255, 170], [0, 255, 0], [170, 255, 0],
+                               [255, 170, 0], [255, 0, 0], [255, 0, 170], [170, 0, 255], [170, 170, 0],
+                               [0, 170, 0], [255, 20, 0], [50, 0, 170], [0, 0, 255], [150, 170, 0],
+                               [170, 0, 170]]
+                if len(skeleton):
+                    skeleton = np.reshape(skeleton, (-1, 2))
+                    neck = np.array((keypoints[i, 5, :] + keypoints[i, 6, :]) / 2).astype(int)
+                    if keypoints[i, 5, 2] == 0 or keypoints[i, 6, 2] == 0:
+                        neck = [0, 0, 0]
+                    limb_index = -1
+                    for limb in skeleton:
+                        limb_index += 1
+                        start_index, end_index = limb  # connection joint index from 0 to 16
+                        if start_index == -1:
+                            Joint_start = neck
+                        else:
+                            Joint_start = keypoints[i][start_index]
+                        if end_index == -1:
+                            Joint_end = neck
+                        else:
+                            Joint_end = keypoints[i][end_index]
+                        # both are Annotated
+                        # Joint:(x,y,v)
+                        if (Joint_start[2] != 0) & (Joint_end[2] != 0):
+                            # print(color)
+                            cv2.line(image, tuple(Joint_start[:2]), tuple(Joint_end[:2]), limb_colors[limb_index], 5)
+                mask = masks[:, :, i]
+                image = visualize.apply_mask(image, mask, color)
+                caption = "{} {:.3f}".format(class_names[class_ids[i]], scores[i])
+                cv2.putText(image, caption, (x1 + 5, y1 + 16), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5, color)
+            return image
 
-        fortran_ground_truth_binary_mask = np.asfortranarray(ground_truth_binary_mask)
-        encoded_ground_truth = mask.encode(fortran_ground_truth_binary_mask)
-        ground_truth_area = mask.area(encoded_ground_truth)
-        ground_truth_bounding_box = mask.toBbox(encoded_ground_truth)
-        contours = measure.find_contours(ground_truth_binary_mask, 0.5)
+        # cap = cv2.VideoCapture(0) # uses the computer connected camera
+        # cap = cv2.VideoCapture("/Users/alessandrorusso/Downloads/test.mp4")
+        # out = cv2.VideoWriter('/Users/alessandrorusso/Downloads/test_out.avi', -1, 20.0, (1080, 1920))
 
-        annotation = {
-            "segmentation": [],
-            "area": ground_truth_area.tolist(),
-            "iscrowd": 0,
-            "image_id": 123,
-            "bbox": ground_truth_bounding_box.tolist(),
-            "category_id": 1,
-            "id": 1
-        }
+        cap = cv2.VideoCapture(VIDEO_PATH)
 
-        for contour in contours:
-            contour = np.flip(contour, axis=1)
-            segmentation = contour.ravel().tolist()
-            annotation["segmentation"].append(segmentation)
+        # Define the codec and create VideoWriter object.The output is stored in '<filename>.avi' file.
+        # Define the fps to be equal to 10. Also frame size is passed.
+        frame_width = int(cap.get(3))
+        frame_height = int(cap.get(4))
+        out = cv2.VideoWriter(VIDEO_PATH_OUT, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 10,
+                              (frame_width, frame_height))
+        while (True):
+            ret, frame = cap.read()
 
-        print(json.dumps(annotation, indent=4))
+            if ret == True:
+                # get a frame
+                ret, frame = cap.read()
+                "BGR->RGB"
+                if frame is None:
+                    break
+                rgb_frame = frame[:, :, ::-1]
+                print(np.shape(frame))
+                # Run detection
+                t = time.time()
+                results = model.detect([rgb_frame], verbose=0)
+                # show a frame
+                t = time.time() - t
+                print(1.0 / t)
+                r = results[0]  # for one image
+
+                result_image = _cv2_display_keypoint(frame,
+                                                     r['bboxes'],
+                                                     r['keypoints'],
+                                                     r['masks'],
+                                                     r['class_ids'],
+                                                     r['scores'],
+                                                     class_names)
+
+                out.write(result_image)
+                # cv2.imshow('Detect image', result_image)
+                # Press Q on keyboard to stop recording
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            else:
+                break
+
+        cap.release()
+        out.release()
+        cv2.destroyAllWindows()

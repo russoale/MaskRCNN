@@ -877,6 +877,8 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
                 valid_ids.append(id)
         image_ids = valid_ids
 
+        print("mask count: ", len(image_ids))
+
     # Limit to a subset
     if limit and limit < len(image_ids):
         image_ids = image_ids[:limit]
@@ -890,9 +892,9 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
     results = []
     total_image_count = len(image_ids)
     next_prgress = 0
-    for i, image_id in enumerate(image_ids):
+    for idx, image_id in enumerate(image_ids):
         # print progress
-        progress = int(100 * (i / total_image_count))
+        progress = int(100 * (idx / total_image_count))
         if next_prgress != progress:
             next_prgress = progress
             print('\r[{0}{1}] {2}%'.format('#' * progress, " " * (100 - progress), progress), end=' ', flush=True)
@@ -913,7 +915,7 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
 
         # Convert results to COCO format
         # Cast masks to uint8 because COCO tools errors out on bool
-        image_results = build_jump_results(dataset, jump_image_ids[i:i + 1], r)
+        image_results = build_jump_results(dataset, jump_image_ids[idx:idx + 1], r)
         results.extend(image_results)
 
     print("")
@@ -955,15 +957,21 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
         # plot
         pck_thresholds, pck_scores = samples.jump.pose_metrics.pck_scores_from_normalized_distances(norm_distance)
 
+        # filter thresholds
+        active_indices = np.where(pck_thresholds < .25)
+        pck_thresholds = pck_thresholds[active_indices]
+        pck_scores = pck_scores[active_indices]
+
         import matplotlib.pyplot as plt
         plt.plot(pck_thresholds, pck_scores)
         plt.xlabel('PCK thresholds')
         plt.ylabel('PCK scores')
         plt.axis([0, pck_thresholds.max(), 0, pck_scores.max()])
-        plt.show()
 
         score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.2)
-        print("Avg. PCK {}".format(score))
+        plt.title("PCK@0.2: {}".format(score))
+        plt.suptitle("")
+        plt.show()
 
     print("----------------------------------")
     print("Prediction time: {}. Average {}/image".format(t_prediction, t_prediction / len(image_ids)))

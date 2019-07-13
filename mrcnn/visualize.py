@@ -198,7 +198,6 @@ def display_keypoints(image, boxes, keypoints, class_ids, class_names,
                 if (Joint_start[2] != 0) & (Joint_end[2] != 0):
                     cv2.line(skeleton_image, tuple(Joint_start[:2]), tuple(Joint_end[:2]), [x * 255 for x in color], thickness=3)
     ax.imshow(skeleton_image.astype(np.uint8))
-    plt.show()
 
 
 def random_colors(N, bright=True):
@@ -309,8 +308,6 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             p = Polygon(verts, facecolor="none", edgecolor=color)
             ax.add_patch(p)
     ax.imshow(masked_image.astype(np.uint8))
-    if auto_show:
-        plt.show()
 
 
 def display_differences(image,
