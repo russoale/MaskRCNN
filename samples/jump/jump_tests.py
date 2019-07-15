@@ -25,14 +25,25 @@ DATA_DIR = os.path.abspath("/data/hdd")
 MODEL_DIR = os.path.join(DATA_DIR, "russales", "test_logs")
 
 # Local path to trained weights file
-JUMP_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "jump20190625T1622", "mask_rcnn_jump_0160.h5")
+JUMP_MODEL_PATH = os.path.join(DATA_DIR, "russales", "logs", "jump20190625T1622", "mask_rcnn_jump_0025.h5")
+
+# keypoint only
+JUMP_MODEL_PATH_KEYPOINT = os.path.join(DATA_DIR, "russales", "logs", "jump20190413T1600", "mask_rcnn_jump_0160.h5")
 
 # Example Video Path
 VIDEO_PATH = os.path.join(DATA_DIR, "russales", "JumpDataset", "Videos", "Dreisprung", "drei 180617 Garritsen 1.mp4")
-VIDEO_PATH_OUT = os.path.join(DATA_DIR, "russales", "drei_180617_Garritsen_1_out_160.avi")
+VIDEO_PATH_OUT = os.path.join(DATA_DIR, "russales", "drei_180617_Garritsen_1_out_160_jump_kp_only.avi")
 
 
 class JumpTests(TestCase):
+
+    def get_model_path(self, training_heads):
+        if training_heads is None:
+            return JUMP_MODEL_PATH
+        elif training_heads == "keypoint":
+            return JUMP_MODEL_PATH_KEYPOINT
+        else:
+            raise Exception("training_heads not specified correctly")
 
     def load_test_config(self, training_heads):
         class TestConfig(jump.JumpConfig):
@@ -58,7 +69,7 @@ class JumpTests(TestCase):
 
     def test_load_mask(self):
         # load image and ground truth data
-        config = self.load_test_config("mask")
+        config = self.load_test_config("keypoint")
         dataset = self.load_dataset()
         dg = data_generator.DataGenerator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
 
@@ -126,48 +137,21 @@ class JumpTests(TestCase):
                                     title="Original", dataset=dataset)
         pass
 
-    def test_predict_mask(self):
+    def test_predict(self):
         # load image and ground truth data
-        config = self.load_test_config(None)
-        dataset = self.load_dataset("train")
+        training_heads = "keypoint"
+        sets = ["train", "val", "test"]
 
-        model = modellib.MaskRCNN(mode="inference", config=config, model_dir=MODEL_DIR)
+        for set in sets:
+            config = self.load_test_config(training_heads)
+            dataset = self.load_dataset(set)
+            model_path = self.get_model_path(training_heads)
 
-        # Load weights
-        print("Loading weights ", JUMP_MODEL_PATH)
-        load_weights(model, JUMP_MODEL_PATH, by_name=True, include_optimizer=False)
+            model = modellib.MaskRCNN(mode="inference", config=config, model_dir=MODEL_DIR)
 
-        dg = data_generator.DataGenerator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
-
-        image_ids = [id for id, img in dataset.jump.imgs.items() if "091217 Nogueira 6" in img['file_name']]
-
-        # has_ann = []
-        # for id in image_ids:
-        #     _, _, mask_train = dataset.load_mask(id)
-        #     has_ann.append(mask_train)
-
-        # image_id = random.choice(dataset.image_ids)
-        # image_ids = []
-        # random.shuffle(dataset.image_ids)
-        # for id in dataset.image_ids:
-        #     _, _, mask_train = dataset.load_mask(id)
-        #     if mask_train == 1:
-        #         image_ids.append(id)
-        #     if len(image_ids) == 5:
-        #         break
-
-        rows = math.ceil(len(image_ids) / 5)
-        height = (len(image_ids) / 5) * 16
-        f = plt.figure(figsize=(80, height))
-        for idx, image_id in enumerate(image_ids):
-            info = [i for i in dataset.image_info if i["id"] == image_id][0]
-            _, _, mask_train = dataset.load_mask(dataset.image_info.index(info))
-            print("image ID: {}.{} ({}) {}".format(info["source"], info["id"], image_id,
-                                                   dataset.image_reference(image_id)))
-
-            image_id = dataset.image_info.index([i for i in dataset.image_info if i["id"] == image_id][0])
-            image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
-                dg.load_image_gt(image_id, augmentation=None, use_mini_mask=False)
+            # Load weights
+            print("Loading weights ", model_path)
+            load_weights(model, model_path, by_name=True, include_optimizer=False)
 
             # create skeleton to display joints
             from samples.jump.bisp_joint_order import JumpJointOrder
@@ -178,52 +162,91 @@ class JumpTests(TestCase):
             for connection in skeleton:
                 connection[0], connection[1] = connection + 1
 
-            results = model.detect([image], verbose=1)
+            dg = data_generator.DataGenerator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
 
-            # Display results
-            r = results[0]
+            # image_ids = [id for id, img in dataset.jump.imgs.items() if "091217 Nogueira 6" in img['file_name']]
 
-            bboxes_res = r['bboxes']
-            class_ids_res = r['class_ids']
-            scores_res = r['scores']
-            keypoints_res = r['keypoints']
-            mask_res = r['masks']
-            print("Mask detected: ", mask_res.max())
-            ax = f.add_subplot(rows, 5, idx + 1)
-            visualize.display_instances(image, bboxes_res, mask_res, class_ids_res, dataset.class_names, ax=ax,
-                                        title="Mask annotation available: {}".format(mask_train))
+            for run in range(5):
+                random.shuffle(dataset.image_ids)
+                image_ids = random.sample(list(dataset.image_ids), 10)
 
-        # ax0 = f.add_subplot(221)
-        # ax1 = f.add_subplot(222)
-        # ax2 = f.add_subplot(223)
-        # ax3 = f.add_subplot(224)
-        # visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names, skeleton=skeleton,
-        #                             ax=ax0, title="Original", dataset=dataset)
-        # visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids, dataset.class_names, ax=ax1,
-        #                             title="Original")
-        # visualize.display_keypoints(image, bboxes_res, keypoints_res, class_ids_res, dataset.class_names,
-        #                             skeleton=skeleton, scores=scores_res,
-        #                             title="Predictions", ax=ax2, dataset=dataset)
-        # visualize.display_instances(image, bboxes_res, mask_res, class_ids_res, dataset.class_names,
-        #                             title="Predictions", ax=ax3)
+                # has_ann = []
+                # for id in image_ids:
+                #     _, _, mask_train = dataset.load_mask(id)
+                #     has_ann.append(mask_train)
 
-        # plt.show()
-        # plt.savefig("jump20190625T1622/160/val/{}-{}.png".format(info["source"], info["id"]))
-        # plt.savefig("jump20190625T1622/25/val/multiple.png", bbox_inches='tight')
-        plt.savefig("jump20190625T1622/vid_sequence_Nogueira_train_25.png", bbox_inches='tight')
+                # image_id = random.choice(dataset.image_ids)
+                # image_ids = []
+                # random.shuffle(dataset.image_ids)
+                # for id in dataset.image_ids:
+                #     _, _, mask_train = dataset.load_mask(id)
+                #     if mask_train == 1:
+                #         image_ids.append(id)
+                #     if len(image_ids) == 5:
+                #         break
+
+                print("found {} images".format(len(image_ids)))
+                rows = math.ceil(len(image_ids) / 5)
+                height = (len(image_ids) / 5) * 16
+                f = plt.figure(figsize=(80, height))
+                for idx, image_id in enumerate(image_ids):
+                    if training_heads is None:
+                        info = [i for i in dataset.image_info if i["id"] == image_id][0]
+                        _, _, mask_train = dataset.load_mask(dataset.image_info.index(info))
+                    else:
+                        info = dataset.image_info[image_id]
+
+                    print("image ID: {}.{} ({}) {}".format(info["source"], info["id"], image_id,
+                                                           dataset.image_reference(image_id)))
+
+                    if training_heads is None:
+                        image_id = dataset.image_info.index([i for i in dataset.image_info if i["id"] == image_id][0])
+
+                    image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
+                        dg.load_image_gt(image_id, augmentation=None, use_mini_mask=False)
+
+                    # select which mode for inference
+                    if training_heads is None:
+                        results = model.detect([image], verbose=1)
+                    elif training_heads == "keypoint":
+                        results = model.detect_keypoint([image], verbose=1)
+                    else:
+                        results = model.detect_mask([image], verbose=1)
+
+                    # Display results
+                    r = results[0]
+
+                    bboxes_res = r['bboxes']
+                    class_ids_res = r['class_ids']
+                    scores_res = r['scores']
+                    if training_heads == "keypoint" or training_heads is None:
+                        keypoints_res = r['keypoints']
+                    if training_heads == "mask" or training_heads is None:
+                        mask_res = r['masks']
+                        print("Mask detected: ", mask_res.max())
+
+                    ax = f.add_subplot(rows, 5, idx + 1)
+                    # visualize.display_instances(image, bboxes_res, mask_res, class_ids_res, dataset.class_names, ax=ax,
+                    #                             title="Mask annotation available: {}".format(mask_train))
+                    visualize.display_keypoints(image, bboxes_res, keypoints_res, class_ids_res, dataset.class_names,
+                                                skeleton=skeleton, scores=scores_res,
+                                                ax=ax, dataset=dataset)
+
+                # plt.show()
+                plt.savefig("jump20190413T1600/160/{}/multiple{}.png".format(set, run), bbox_inches='tight')
+                # plt.savefig("jump20190625T1622/vid_sequence_Nogueira_train_25.png", bbox_inches='tight')
 
     def test_video(self):
         # load image and ground truth data
-        config = self.load_test_config(None)
+        config = self.load_test_config("keypoint")
         model = modellib.MaskRCNN(mode="inference", config=config, model_dir=MODEL_DIR)
-        # load_weights(model, "/Users/alessandrorusso/Downloads/mask_rcnn_jump_0160.h5", by_name=True, include_optimizer=False)
         load_weights(model, JUMP_MODEL_PATH, by_name=True, include_optimizer=False)
 
         class_names = ['BG', 'person']
         jump_joint = JumpJointOrder()
         skeleton = np.array(jump_joint.bodypart_indices(), dtype=np.int32)
 
-        def _cv2_display_keypoint(image, boxes, keypoints, masks, class_ids, scores, class_names,
+        def _cv2_display_keypoint(image, boxes, keypoints, class_ids, scores, class_names, masks=None,
                                   skeleton=skeleton):
             # Number of persons
             N = boxes.shape[0]
@@ -272,17 +295,16 @@ class JumpTests(TestCase):
                         if (Joint_start[2] != 0) & (Joint_end[2] != 0):
                             # print(color)
                             cv2.line(image, tuple(Joint_start[:2]), tuple(Joint_end[:2]), limb_colors[limb_index], 5)
-                mask = masks[:, :, i]
-                image = visualize.apply_mask(image, mask, color)
+                if not (masks is None):
+                    mask = masks[:, :, i]
+                    image = visualize.apply_mask(image, mask, color)
+
                 caption = "{} {:.3f}".format(class_names[class_ids[i]], scores[i])
                 cv2.putText(image, caption, (x1 + 5, y1 + 16), cv2.FONT_HERSHEY_SIMPLEX,
                             0.5, color)
             return image
 
         # cap = cv2.VideoCapture(0) # uses the computer connected camera
-        # cap = cv2.VideoCapture("/Users/alessandrorusso/Downloads/test.mp4")
-        # out = cv2.VideoWriter('/Users/alessandrorusso/Downloads/test_out.avi', -1, 20.0, (1080, 1920))
-
         cap = cv2.VideoCapture(VIDEO_PATH)
 
         # Define the codec and create VideoWriter object.The output is stored in '<filename>.avi' file.
@@ -291,10 +313,10 @@ class JumpTests(TestCase):
         frame_height = int(cap.get(4))
         out = cv2.VideoWriter(VIDEO_PATH_OUT, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), 10,
                               (frame_width, frame_height))
-        while (True):
+        while True:
             ret, frame = cap.read()
 
-            if ret == True:
+            if ret:
                 # get a frame
                 ret, frame = cap.read()
                 "BGR->RGB"
@@ -304,7 +326,7 @@ class JumpTests(TestCase):
                 print(np.shape(frame))
                 # Run detection
                 t = time.time()
-                results = model.detect([rgb_frame], verbose=0)
+                results = model.detect_keypoint([rgb_frame], verbose=0)
                 # show a frame
                 t = time.time() - t
                 print(1.0 / t)
@@ -313,10 +335,12 @@ class JumpTests(TestCase):
                 result_image = _cv2_display_keypoint(frame,
                                                      r['bboxes'],
                                                      r['keypoints'],
-                                                     r['masks'],
                                                      r['class_ids'],
                                                      r['scores'],
-                                                     class_names)
+                                                     class_names,
+                                                     # masks=r['masks'],
+                                                     skeleton=skeleton
+                                                     )
 
                 out.write(result_image)
                 # cv2.imshow('Detect image', result_image)

@@ -62,6 +62,10 @@ ENV/
 samples/coco/annotations
 samples/coco/val2017
 samples/coco/train2017
+samples/coco/coco20190324T2219
+samples/coco/coco20190404T2343
+samples/coco/coco20190402T2205
 
 # jump
 samples/jump/jump20190625T1622
+samples/jump/jump20190413T1600
