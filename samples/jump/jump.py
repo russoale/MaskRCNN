@@ -969,9 +969,29 @@ def evaluate_jump(model, dataset, jump, eval_type="bbox", limit=0, image_ids=Non
         plt.axis([0, pck_thresholds.max(), 0, pck_scores.max()])
 
         score = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.2)
-        plt.title("PCK@0.2: {}".format(score))
+        xlim, ylim = plt.xlim(), plt.ylim()
+        idx = np.where(pck_scores == score)
+        plt.plot([pck_thresholds[idx], pck_thresholds[idx], xlim[0]], [xlim[0], pck_scores[idx], pck_scores[idx]],
+                 linestyle="--")
+
+        score2 = samples.jump.pose_metrics.pck_score_at_threshold(pck_thresholds, pck_scores, 0.1)
+        idx = np.where(pck_scores == score2)
+        plt.plot([pck_thresholds[idx], pck_thresholds[idx], xlim[0]], [xlim[0], pck_scores[idx], pck_scores[idx]],
+                 linestyle="--")
+
+
+        plt.xlim(xlim)
+        plt.ylim(ylim)
+        plt.xticks(np.arange(0, 0.3, 0.05))
+        plt.yticks(np.arange(0, 1, 0.05))
+
+        print("score 02: ", round(score, 3))
+        print("score 02: ", round(score2, 3))
+        plt.title("PCK - @0.2: {}, @0.1: {}".format(round(score, 3), round(score2, 3)))
         plt.suptitle("")
-        plt.show()
+        plt.grid()
+        plt.savefig("jump20190625T1622/plot_pck_jump20190625T1622_3.png")
+        # plt.show()
 
     print("----------------------------------")
     print("Prediction time: {}. Average {}/image".format(t_prediction, t_prediction / len(image_ids)))
@@ -1185,6 +1205,11 @@ if __name__ == '__main__':
         # Load weights
         print("Loading weights from ", model_path)
         load_weights(model, model_path, by_name=True, include_optimizer=False)
+
+        # image_ids = [id for id, img in dataset_test.jump.imgs.items() if "weit 060617 Bauschke 5" in img['file_name']]
+        # valid_ids = []
+        # for image_id in image_ids:
+        #     valid_ids.append(dataset_test.image_info.index([i for i in dataset_test.image_info if i["id"] == image_id][0]))
 
         print("Start evaluation..")
         evaluate_jump(model, dataset_test, jump, args.eval_type, limit=int(args.limit),

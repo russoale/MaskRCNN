@@ -73,7 +73,7 @@ class CocoTests(TestCase):
 
     def test_predict(self):
         # load image and ground truth data
-        training_heads = "mask"
+        training_heads = None # "keypoint"
         config = self.load_test_config(training_heads)
         dataset = self.load_dataset("val")
         model_path = self.get_model_path(training_heads)
@@ -87,49 +87,54 @@ class CocoTests(TestCase):
 
         dg = data_generator.DataGenerator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
 
-        image_ids = random.sample(list(dataset.image_ids), 5)
 
-        rows = math.ceil(len(image_ids) / 5)
-        height = (len(image_ids) / 5) * 16
-        f = plt.figure(figsize=(80, height))
-        for idx, image_id in enumerate(image_ids):
-            info = dataset.image_info[image_id]
-            print("image ID: {}.{} ({}) {}".format(info["source"], info["id"], image_id,
-                                                   dataset.image_reference(image_id)))
+        for i in range(20):
+            random.shuffle(dataset.image_ids)
+            image_ids = random.sample(list(dataset.image_ids), 3)
 
-            image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
-                dg.load_image_gt(image_id, augmentation=None, use_mini_mask=False)
+            rows = math.ceil(len(image_ids) / 3)
+            height = (len(image_ids) / 3) * 16
+            f = plt.figure(figsize=(48, height))
+            for idx, image_id in enumerate(image_ids):
+                info = dataset.image_info[image_id]
+                print("image ID: {}.{} ({}) {}".format(info["source"], info["id"], image_id,
+                                                       dataset.image_reference(image_id)))
 
-            if training_heads is None:
-                results = model.detect([image], verbose=1)
-            elif training_heads == "keypoint":
-                results = model.detect_keypoint([image], verbose=1)
-            else:
-                results = model.detect_mask([image], verbose=1)
+                image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
+                    dg.load_image_gt(image_id, augmentation=None, use_mini_mask=False)
+
+                if training_heads is None:
+                    results = model.detect([image], verbose=1)
+                elif training_heads == "keypoint":
+                    results = model.detect_keypoint([image], verbose=1)
+                else:
+                    results = model.detect_mask([image], verbose=1)
 
 
-            # Display results
-            r = results[0]
+                # Display results
+                r = results[0]
 
-            bboxes_res = r['bboxes']
-            class_ids_res = r['class_ids']
-            scores_res = r['scores']
-            if training_heads == "keypoint" or training_heads is None:
-                keypoints_res = r['keypoints']
-            if training_heads == "mask" or training_heads is None:
-                mask_res = r['masks']
-                print("Mask detected: ", mask_res.max())
+                bboxes_res = r['bboxes']
+                class_ids_res = r['class_ids']
+                scores_res = r['scores']
+                if training_heads == "keypoint" or training_heads is None:
+                    keypoints_res = r['keypoints']
+                if training_heads == "mask" or training_heads is None:
+                    mask_res = r['masks']
+                    print("Mask detected: ", mask_res.max())
 
-            ax = f.add_subplot(rows, 5, idx + 1)
+                ax = f.add_subplot(rows, 3, idx + 1)
 
-            visualize.display_instances(image, bboxes_res, mask_res, class_ids_res, dataset.class_names, ax=ax)
-            # visualize.display_keypoints(image, bboxes_res, keypoints_res, class_ids_res, dataset.class_names,
-            #                             skeleton=dataset.skeleton, scores=scores_res, ax=ax, dataset=dataset)
+                visualize.display_keypoint_mask(image, bboxes_res, mask_res, keypoints_res, class_ids_res, dataset.class_names,
+                                                skeleton=dataset.skeleton, scores=scores_res, ax=ax)
+                # visualize.display_instances(image, bboxes_res, mask_res, class_ids_res, dataset.class_names, ax=ax)
+                # visualize.display_keypoints(image, bboxes_res, keypoints_res, class_ids_res, dataset.class_names,
+                #                              skeleton=dataset.skeleton, scores=scores_res, ax=ax, dataset=dataset)
 
-        # plt.show()
-        # plt.savefig("coco20190324T2219/160/val/{}-{}.png".format(info["source"], info["id"]))
-        plt.savefig("coco20190402T2205/val_multiple_mask_only2.png", bbox_inches='tight')
-        # plt.savefig("coco20190324T2219/vid_sequence_Nogueira_train_25.png", bbox_inches='tight')
+            # plt.show()
+            # plt.savefig("coco20190324T2219/160/val/{}-{}.png".format(info["source"], info["id"]))
+            plt.savefig("coco20190324T2219/3val_multiple_kp_mask{}.png".format(i), bbox_inches='tight')
+            # plt.savefig("coco20190324T2219/vid_sequence_Nogueira_train_25.png", bbox_inches='tight')
 
     def test_video(self):
         # load image and ground truth data

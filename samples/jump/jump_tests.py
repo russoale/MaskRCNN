@@ -69,27 +69,41 @@ class JumpTests(TestCase):
 
     def test_load_mask(self):
         # load image and ground truth data
-        config = self.load_test_config("keypoint")
-        dataset = self.load_dataset()
+        training_heads = None
+        config = self.load_test_config(training_heads)
+        dataset = self.load_dataset("train")
         dg = data_generator.DataGenerator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
 
-        # image_id = random.choice(dataset.image_ids)
-        image_id = 6
+        image_ids = [id for id, img in dataset.jump.imgs.items() if "060617 Buehler 5" in img['file_name']]
 
-        info = dataset.image_info[image_id]
-        print("image ID: {}.{} ({}) {}".format(info["source"], info["id"], image_id,
-                                               dataset.image_reference(image_id)))
+        has_ann = []
+        for id in image_ids:
+            _, _, mask_train = dataset.load_mask(id)
+            if mask_train == 1:
+                has_ann.append(id)
 
-        augmentation = augmenter.FliplrKeypoint(1, config=config, dataset=dataset)
+        filenames = []
+        for id in has_ann:
+            idx = dataset.image_info[id]["annotations"][0]["image_id"]
+            filenames.append(dataset.jump.imgs[idx]['file_name'])
 
-        image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
-            dg.load_image_gt(image_id, augmentation=augmentation, use_mini_mask=False)
+        image_ids = has_ann
+        print("found {} images".format(len(image_ids)))
 
-        # visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names,
-        #                             ax=ax, title="Original", dataset=dataset)
+        rows = math.ceil(len(image_ids) / 5)
+        height = (len(image_ids) / 5) * 16
+        f = plt.figure(figsize=(80, height))
+        for idx, image_id in enumerate(image_ids):
+            info = dataset.image_info[image_id]
+            print("image ID: jump.{} ({}) {}".format(info["id"], image_id, dataset.image_reference(image_id)))
 
-        visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids,
-                                    dataset.class_names, title="Original")
+            image, image_meta, gt_class_ids, gt_boxes, gt_masks, _, gt_mask_train = dg.load_image_gt(image_id)
+            ax = f.add_subplot(rows, 5, idx + 1)
+            visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids, dataset.class_names, ax=ax,
+                                        title=filenames[idx])
+
+        # plt.show()
+        plt.savefig("jump20190625T1622/gt_buehler.png", bbox_inches='tight')
         pass
 
     def test_mask_augmentation(self):
@@ -99,7 +113,7 @@ class JumpTests(TestCase):
         dg = data_generator.DataGenerator(dataset, config, shuffle=True, batch_size=config.BATCH_SIZE)
 
         image_id = random.choice(dataset.image_ids)
-        # image_id = 2666
+        image_id = 1205
         info = dataset.image_info[image_id]
         print("image ID: {}.{} ({}) {}".format(info["source"], info["id"], image_id,
                                                dataset.image_reference(image_id)))
@@ -107,20 +121,20 @@ class JumpTests(TestCase):
         augmentation = iaa.Sequential([
             augmenter.FliplrKeypoint(0.5, config=config, dataset=dataset),
             iaa.Crop(percent=(0, 0.2)),
-            iaa.Sometimes(0.5, iaa.GaussianBlur(sigma=(0, 0.5))),
-            iaa.ContrastNormalization((0.75, 1.5)),
-            iaa.Multiply((0.8, 1.2), per_channel=0.2),
+            # iaa.Sometimes(0.5, iaa.GaussianBlur(sigma=(0, 0.5))),
+            # iaa.ContrastNormalization((0.75, 1.5)),
+            # iaa.Multiply((0.8, 1.2), per_channel=0.2),
             iaa.Affine(
-                scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                # scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
                 translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
-                rotate=(-25, 25),
-                shear=(-8, 8)
+                # rotate=(-25, 25),
+                # shear=(-8, 8)
             ),
-            iaa.AssertShape((None, 1024, 1024, 3))
+            # iaa.AssertShape((None, 1024, 1024, 3))
         ], random_order=True)
 
         image, image_meta, gt_class_ids, gt_boxes, gt_masks, gt_keypoints, gt_mask_train = \
-            dg.load_image_gt(image_id, augmentation=None, use_mini_mask=True)
+            dg.load_image_gt(image_id, augmentation=augmentation, use_mini_mask=True)
 
         # if gt_masks.max() > 0:
         #     gt_masks = utils.expand_mask(gt_boxes, gt_masks, image.shape)
@@ -135,7 +149,21 @@ class JumpTests(TestCase):
         print(skeleton)
         visualize.display_keypoints(image, gt_boxes, gt_keypoints, gt_class_ids, dataset.class_names, skeleton=skeleton,
                                     title="Original", dataset=dataset)
+        plt.show()
         pass
+
+    def test_plot_tf_board(self):
+        from numpy import genfromtxt
+        data_train = genfromtxt('place path to downloaded tf TRAIN loss.csv here', delimiter=',')[1:, 1:]
+        plt.plot(data_train[:, 0], data_train[:, 1])
+        data_val = genfromtxt('place path to downloaded tf VAL loss.csv here', delimiter=',')[1:, 1:]
+        plt.plot(data_val[:, 0], data_val[:, 1])
+        plt.gca().legend(('Training', 'Validierung'))
+        plt.xlabel('Epoche')
+        plt.ylabel('Fehler')
+        plt.axis([0, max(data_train[:, 0].max(), data_val[:, 0].max()),
+                  0, max(data_train[:, 1].max(), data_val[:, 1].max())])
+        plt.show()
 
     def test_predict(self):
         # load image and ground truth data

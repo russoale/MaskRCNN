@@ -184,7 +184,7 @@ def display_keypoints(image, boxes, keypoints, class_ids, class_names,
             if (Joint[2] != 0):
                 circle = patches.Circle((Joint[0], Joint[1]), radius=1, edgecolor=color, facecolor='none')
                 ax.add_patch(circle)
-                ax.text(Joint[0], Joint[1], keypoint_label[idx], color="w", size=8, backgroundcolor="none")
+                # ax.text(Joint[0], Joint[1], keypoint_label[idx], color="w", size=8, backgroundcolor="none")
 
         # Skeleton: 19*2
         if skeleton is not None:
@@ -196,7 +196,8 @@ def display_keypoints(image, boxes, keypoints, class_ids, class_names,
                 # both are Annotated
                 # Joint:(x,y,v)
                 if (Joint_start[2] != 0) & (Joint_end[2] != 0):
-                    cv2.line(skeleton_image, tuple(Joint_start[:2]), tuple(Joint_end[:2]), [x * 255 for x in color], thickness=3)
+                    cv2.line(skeleton_image, tuple(Joint_start[:2]), tuple(Joint_end[:2]), [x * 255 for x in color],
+                             thickness=3)
     ax.imshow(skeleton_image.astype(np.uint8))
 
 
@@ -308,6 +309,88 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             p = Polygon(verts, facecolor="none", edgecolor=color)
             ax.add_patch(p)
     ax.imshow(masked_image.astype(np.uint8))
+
+
+def display_keypoint_mask(image, boxes, masks, keypoints, class_ids, class_names, scores=None, skeleton=None, title="",
+                          figsize=(16, 16), ax=None):
+    N = boxes.shape[0]
+    if not N:
+        print("\n*** No persons to display *** \n")
+    else:
+        assert boxes.shape[0] == keypoints.shape[0] == class_ids.shape[0]
+
+    if not ax:
+        _, ax = plt.subplots(1, figsize=figsize)
+
+    # Show area outside image boundaries.
+    height, width = image.shape[:2]
+    ax.set_ylim(height + 10, -10)
+    ax.set_xlim(-10, width + 10)
+    ax.axis('off')
+    ax.set_title(title)
+
+    if not N:
+        print("\n*** No persons to display *** \n")
+    else:
+        assert N == keypoints.shape[0] and N == class_ids.shape[0] and N == scores.shape[0], \
+            "shape must match: boxes,keypoints,class_ids, scores"
+    colors_kp = random_colors(N)
+    colors_mask = random_colors(N)
+    image_copy = image.astype(np.float32).copy()
+    for i in range(N):
+        color = colors_kp[i]
+        # Bounding box
+        if not np.any(boxes[i]):
+            # Skip this instance. Has no bbox. Likely lost in image cropping.
+            continue
+        y1, x1, y2, x2 = boxes[i]
+        p = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2,
+                              alpha=0.7, linestyle="dashed",
+                              edgecolor=color, facecolor='none')
+        ax.add_patch(p)
+
+        # Label
+        class_id = class_ids[i]
+        score = scores[i] if scores is not None else None
+        label = class_names[class_id]
+
+        caption = "{} {:.3f}".format(label, score) if score else label
+        ax.text(x1, y1 + 8, caption,
+                color='w', size=11, backgroundcolor="none")
+
+        for idx, Joint in enumerate(keypoints[i]):
+            if (Joint[2] != 0):
+                circle = patches.Circle((Joint[0], Joint[1]), radius=1, edgecolor=color, facecolor='none')
+                ax.add_patch(circle)
+
+        if skeleton is not None:
+            for connection in skeleton:
+                joint_start, joint_end = connection - 1  # connection stats from 1 to 17
+
+                Joint_start = keypoints[i][joint_start]
+                Joint_end = keypoints[i][joint_end]
+                if (Joint_start[2] != 0) & (Joint_end[2] != 0):
+                    cv2.line(image_copy, tuple(Joint_start[:2]), tuple(Joint_end[:2]), [x * 255 for x in color],
+                             thickness=3)
+
+        # Mask
+        mask = masks[:, :, i]
+        color = colors_mask[i]
+        image_copy = apply_mask(image_copy, mask, color)
+
+        # Mask Polygon
+        # Pad to ensure proper polygons for masks that touch image edges.
+        padded_mask = np.zeros(
+            (mask.shape[0] + 2, mask.shape[1] + 2), dtype=np.uint8)
+        padded_mask[1:-1, 1:-1] = mask
+        contours = find_contours(padded_mask, 0.5)
+        for verts in contours:
+            # Subtract the padding and flip (y, x) to (x, y)
+            verts = np.fliplr(verts) - 1
+            p = Polygon(verts, facecolor="none", edgecolor=color)
+            ax.add_patch(p)
+
+    ax.imshow(image_copy.astype(np.uint8))
 
 
 def display_differences(image,
